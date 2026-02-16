@@ -152,7 +152,7 @@ export default function DashboardPage() {
           </Link>
 
           <div className="flex items-center gap-3">
-            <span className="hidden text-sm text-muted sm:block">
+            <span className="hidden max-w-[200px] truncate text-sm text-muted sm:block">
               {user}
             </span>
             <button
@@ -174,7 +174,7 @@ export default function DashboardPage() {
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground md:text-3xl">
-              Welcome back, <span className="text-indigo">{user}</span>
+              Welcome back, <span className="inline-block max-w-[200px] truncate overflow-hidden align-bottom text-indigo">{user}</span>
             </h1>
             <p className="mt-1 text-sm text-muted">
               {projects.length === 0

@@ -376,7 +376,7 @@ const EditorProjectPage: FC = () => {
             Offline Ready
           </span>
 
-          <span className="hidden text-[11px] text-muted sm:block">{user}</span>
+          <span className="hidden max-w-[160px] truncate text-[11px] text-muted sm:block">{user}</span>
 
           <button
             onClick={() => {

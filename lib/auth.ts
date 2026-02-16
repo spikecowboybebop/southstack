@@ -1,13 +1,22 @@
 /**
  * High-level authentication operations.
  *
- * Orchestrates crypto, IndexedDB, and session management.
- * Every function is async — no plaintext passwords are ever stored.
+ * Orchestrates validation → crypto → IndexedDB → session.
+ * Every function calls `validateAuthInput()` FIRST — before any
+ * PBKDF2 hashing or DB access — to block oversized / malformed input.
+ *
+ * Sensitive variables (salt, hash, keyMaterial) are scoped inside
+ * these functions and never exposed to the global `window` object.
  */
 
 import { generateSalt, hashPassword, timingSafeEqual } from "./crypto";
 import { AuthError, createUser, getUser } from "./db";
 import { createSession, type Session } from "./session";
+import {
+    AUTH_LIMITS,
+    AuthValidationError,
+    validateAuthInput,
+} from "./validation";
 
 // ─── Signup ─────────────────────────────────────────────────
 
@@ -19,36 +28,44 @@ export interface SignupResult {
 /**
  * Register a new user.
  *
- * 1. Generates a 256-bit salt via crypto.getRandomValues()
- * 2. Derives a PBKDF2 hash (100 000 iterations, SHA-256)
- * 3. Stores { username, salt, hash } in IndexedDB
- * 4. Creates and returns a session
+ * 1. Validates input via Zod + hardcoded guardrails
+ * 2. Generates a 256-bit salt via crypto.getRandomValues()
+ * 3. Derives a PBKDF2 hash (100 000 iterations, SHA-256)
+ * 4. Stores { username, salt, hash } in IndexedDB
+ * 5. Creates and returns a session
  *
+ * @throws AuthValidationError if input fails schema/length checks
  * @throws AuthError("USERNAME_TAKEN") if user already exists
  */
 export async function signup(
   username: string,
   password: string
 ): Promise<SignupResult> {
-  // Input validation
-  const trimmed = username.trim();
-  if (!trimmed) throw new AuthError("DB_ERROR", "Username cannot be empty.");
-  if (password.length < 8)
-    throw new AuthError("DB_ERROR", "Password must be at least 8 characters.");
+  // ── HARDCODED GUARDRAILS (defense-in-depth) ──
+  // These fire before ANYTHING else, even if Zod or React state is bypassed.
+  if (typeof username !== "string" || username.length > AUTH_LIMITS.USERNAME_MAX) {
+    throw new AuthError("DB_ERROR", `Username must not exceed ${AUTH_LIMITS.USERNAME_MAX} characters.`);
+  }
+  if (typeof password !== "string" || password.length > AUTH_LIMITS.PASSWORD_MAX) {
+    throw new AuthError("DB_ERROR", `Password must not exceed ${AUTH_LIMITS.PASSWORD_MAX} characters.`);
+  }
 
-  // 1. Generate salt
+  // ── Zod validation (schema + regex) ──
+  const validated = validateAuthInput({ username, password });
+
+  // 1. Generate salt (scoped — never on `window`)
   const salt = generateSalt();
 
   // 2. Hash password with PBKDF2
-  const hash = await hashPassword(password, salt);
+  const hash = await hashPassword(validated.password, salt);
 
   // 3. Persist to IndexedDB (throws if username taken)
-  await createUser({ username: trimmed, salt, hash });
+  await createUser({ username: validated.username, salt, hash });
 
   // 4. Create session
-  const session = createSession(trimmed);
+  const session = createSession(validated.username);
 
-  return { session, username: trimmed };
+  return { session, username: validated.username };
 }
 
 // ─── Login ──────────────────────────────────────────────────
@@ -61,11 +78,13 @@ export interface LoginResult {
 /**
  * Authenticate an existing user.
  *
- * 1. Retrieves the user's salt from IndexedDB
- * 2. Re-hashes the input password with that salt
- * 3. Compares hashes using constant-time comparison
- * 4. On success, creates and returns a session
+ * 1. Validates input via Zod + hardcoded guardrails
+ * 2. Retrieves the user's salt from IndexedDB
+ * 3. Re-hashes the input password with that salt
+ * 4. Compares hashes using constant-time comparison
+ * 5. On success, creates and returns a session
  *
+ * @throws AuthValidationError if input fails schema/length checks
  * @throws AuthError("USER_NOT_FOUND")      if username doesn't exist
  * @throws AuthError("INCORRECT_PASSWORD")   if hashes don't match
  */
@@ -73,20 +92,28 @@ export async function login(
   username: string,
   password: string
 ): Promise<LoginResult> {
-  const trimmed = username.trim();
-  if (!trimmed) throw new AuthError("DB_ERROR", "Username cannot be empty.");
+  // ── HARDCODED GUARDRAILS ──
+  if (typeof username !== "string" || username.length > AUTH_LIMITS.USERNAME_MAX) {
+    throw new AuthError("DB_ERROR", `Username must not exceed ${AUTH_LIMITS.USERNAME_MAX} characters.`);
+  }
+  if (typeof password !== "string" || password.length > AUTH_LIMITS.PASSWORD_MAX) {
+    throw new AuthError("DB_ERROR", `Password must not exceed ${AUTH_LIMITS.PASSWORD_MAX} characters.`);
+  }
+
+  // ── Zod validation ──
+  const validated = validateAuthInput({ username, password });
 
   // 1. Look up user
-  const user = await getUser(trimmed);
+  const user = await getUser(validated.username);
   if (!user) {
     throw new AuthError(
       "USER_NOT_FOUND",
-      `No account found for "${trimmed}".`
+      "No account found for that username."
     );
   }
 
   // 2. Re-hash the provided password with the stored salt
-  const hash = await hashPassword(password, user.salt);
+  const hash = await hashPassword(validated.password, user.salt);
 
   // 3. Constant-time comparison
   if (!timingSafeEqual(hash, user.hash)) {
@@ -97,7 +124,10 @@ export async function login(
   }
 
   // 4. Create session
-  const session = createSession(trimmed);
+  const session = createSession(validated.username);
 
-  return { session, username: trimmed };
+  return { session, username: validated.username };
 }
+
+// Re-export for convenience
+export { AuthValidationError };

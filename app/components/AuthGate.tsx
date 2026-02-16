@@ -7,6 +7,7 @@
  * or as a wrapper that shows children only when authenticated.
  */
 
+import { AUTH_LIMITS } from "@/lib/validation";
 import { AlertCircle, Eye, EyeOff, Loader2, Terminal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -26,6 +27,21 @@ export default function AuthGate({ children, defaultMode = "login" }: AuthGatePr
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [usernameLimitHit, setUsernameLimitHit] = useState(false);
+  const [passwordLimitHit, setPasswordLimitHit] = useState(false);
+
+  // Enforce max length via React state — strip whitespace, hard substring
+  function handleUsernameChange(value: string) {
+    const clamped = value.slice(0, 50).replace(/\s/g, "");
+    setUsername(clamped);
+    setUsernameLimitHit(value.length >= AUTH_LIMITS.USERNAME_MAX);
+  }
+
+  function handlePasswordChange(value: string) {
+    const clamped = value.substring(0, AUTH_LIMITS.PASSWORD_MAX);
+    setPassword(clamped);
+    setPasswordLimitHit(value.length >= AUTH_LIMITS.PASSWORD_MAX);
+  }
 
   // Show nothing while checking session
   if (isLoading) {
@@ -45,6 +61,11 @@ export default function AuthGate({ children, defaultMode = "login" }: AuthGatePr
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+
+    // Hard guard — block processing if state was somehow manipulated
+    if (username.length > AUTH_LIMITS.USERNAME_MAX || password.length > AUTH_LIMITS.PASSWORD_MAX) return;
+    if (username.length < 1 || password.length < AUTH_LIMITS.PASSWORD_MIN) return;
+
     const action = mode === "signup" ? signup : login;
     const ok = await action(username, password);
     if (ok) {
@@ -54,7 +75,11 @@ export default function AuthGate({ children, defaultMode = "login" }: AuthGatePr
 
   function toggleMode() {
     setMode((m) => (m === "login" ? "signup" : "login"));
+    setUsername("");
+    setPassword("");
     clearError();
+    setUsernameLimitHit(false);
+    setPasswordLimitHit(false);
   }
 
   // ── Auth UI ──
@@ -85,13 +110,17 @@ export default function AuthGate({ children, defaultMode = "login" }: AuthGatePr
         {/* Card */}
         <form
           onSubmit={handleSubmit}
-          className="rounded-2xl border border-border bg-surface p-8 shadow-xl shadow-black/20"
+          className="h-auto rounded-2xl border border-border bg-surface p-8 shadow-xl shadow-black/20"
         >
           {/* Error banner */}
           {error && (
-            <div className="mb-6 flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-400">
+            <div className="mb-6 flex min-h-fit items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-400">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{error.message}</span>
+              <span className="min-w-0 whitespace-normal break-words">
+                {error.message.length > 120
+                  ? "Invalid input. Please check your credentials."
+                  : error.message}
+              </span>
             </div>
           )}
 
@@ -103,24 +132,36 @@ export default function AuthGate({ children, defaultMode = "login" }: AuthGatePr
             type="text"
             required
             autoComplete="username"
+            maxLength={AUTH_LIMITS.USERNAME_MAX}
             value={username}
-            onChange={(e) => setUsername(e.target.value)}
+            onChange={(e) => handleUsernameChange(e.target.value)}
             placeholder="e.g. devhacker"
-            className="mb-5 w-full rounded-lg border border-border-light bg-background px-4 py-2.5 text-sm text-foreground placeholder-muted/50 outline-none transition-colors focus:border-indigo focus:ring-1 focus:ring-indigo"
+            className="mb-1 w-full rounded-lg border border-border-light bg-background px-4 py-2.5 text-sm text-foreground placeholder-muted/50 outline-none transition-colors focus:border-indigo focus:ring-1 focus:ring-indigo"
           />
+          <div className="mb-4 flex items-center justify-between">
+            {usernameLimitHit ? (
+              <span className="text-[11px] text-amber-400">Character limit reached</span>
+            ) : (
+              <span />
+            )}
+            <span className="text-[11px] text-muted/50">
+              {username.length}/{AUTH_LIMITS.USERNAME_MAX}
+            </span>
+          </div>
 
           {/* Password */}
           <label className="mb-1.5 block text-sm font-medium text-foreground">
             Password
           </label>
-          <div className="relative mb-6">
+          <div className="relative mb-1">
             <input
               type={showPassword ? "text" : "password"}
               required
-              minLength={8}
+              minLength={AUTH_LIMITS.PASSWORD_MIN}
+              maxLength={AUTH_LIMITS.PASSWORD_MAX}
               autoComplete={mode === "signup" ? "new-password" : "current-password"}
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => handlePasswordChange(e.target.value)}
               placeholder="Minimum 8 characters"
               className="w-full rounded-lg border border-border-light bg-background px-4 py-2.5 pr-11 text-sm text-foreground placeholder-muted/50 outline-none transition-colors focus:border-indigo focus:ring-1 focus:ring-indigo"
             />
@@ -132,6 +173,16 @@ export default function AuthGate({ children, defaultMode = "login" }: AuthGatePr
             >
               {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
+          </div>
+          <div className="mb-5 flex items-center justify-between">
+            {passwordLimitHit ? (
+              <span className="text-[11px] text-amber-400">Character limit reached</span>
+            ) : (
+              <span />
+            )}
+            <span className="text-[11px] text-muted/50">
+              {password.length}/{AUTH_LIMITS.PASSWORD_MAX}
+            </span>
           </div>
 
           {/* Submit */}

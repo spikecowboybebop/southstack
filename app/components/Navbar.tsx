@@ -50,9 +50,9 @@ export default function Navbar() {
           ) : isLoggedIn ? (
             <>
               {/* Authenticated: username + logout + Launch Editor */}
-              <span className="hidden items-center gap-1.5 text-sm text-muted sm:flex">
-                <User className="h-3.5 w-3.5" />
-                {user}
+              <span className="hidden max-w-[160px] items-center gap-1.5 text-sm text-muted sm:flex">
+                <User className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{user}</span>
               </span>
               <button
                 onClick={logout}
