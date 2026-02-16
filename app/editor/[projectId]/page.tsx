@@ -18,6 +18,7 @@ import { useAuth } from "../../components/AuthProvider";
 import Sidebar from "../../components/editor/Sidebar";
 import TabBar, { type TabItem } from "../../components/editor/TabBar";
 
+import type { Monaco } from "@monaco-editor/react";
 import {
     ArrowLeft,
     Code2,
@@ -38,6 +39,79 @@ import {
     useState,
     type FC,
 } from "react";
+
+// ─── Custom Monaco Theme ────────────────────────────────────
+
+function handleBeforeMount(monaco: Monaco) {
+  monaco.editor.defineTheme("brand-dark", {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      // Strings → emerald green
+      { token: "string", foreground: "34d399" },
+      { token: "string.escape", foreground: "6ee7b7" },
+      // Keywords → soft pink
+      { token: "keyword", foreground: "f9a8d4" },
+      { token: "keyword.control", foreground: "f9a8d4" },
+      // Functions → electric blue
+      { token: "function", foreground: "60a5fa" },
+      { token: "entity.name.function", foreground: "60a5fa" },
+      { token: "support.function", foreground: "60a5fa" },
+      // Types → warm amber
+      { token: "type", foreground: "fbbf24" },
+      { token: "type.identifier", foreground: "fbbf24" },
+      // Numbers → orange
+      { token: "number", foreground: "fb923c" },
+      { token: "number.hex", foreground: "fb923c" },
+      // Comments → cool grey
+      { token: "comment", foreground: "4b5563", fontStyle: "italic" },
+      // Variables / identifiers
+      { token: "variable", foreground: "c4b5fd" },
+      { token: "variable.predefined", foreground: "c4b5fd" },
+      // Operators
+      { token: "operator", foreground: "f472b6" },
+      { token: "delimiter", foreground: "6b7280" },
+      // Tags (HTML/JSX)
+      { token: "tag", foreground: "f87171" },
+      { token: "attribute.name", foreground: "fbbf24" },
+      { token: "attribute.value", foreground: "34d399" },
+      // Regex
+      { token: "regexp", foreground: "fca5a5" },
+    ],
+    colors: {
+      // Editor background
+      "editor.background": "#0B0E14",
+      // Line highlight — brand indigo tint
+      "editor.lineHighlightBackground": "#6366f10d",
+      "editor.lineHighlightBorder": "#6366f11a",
+      // Selection — brand indigo
+      "editor.selectionBackground": "#6366f133",
+      "editor.inactiveSelectionBackground": "#6366f11a",
+      "editor.selectionHighlightBackground": "#6366f11a",
+      // Cursor
+      "editorCursor.foreground": "#818cf8",
+      // Gutter
+      "editorLineNumber.foreground": "#3f3f46",
+      "editorLineNumber.activeForeground": "#818cf8",
+      // Widget / suggest
+      "editorWidget.background": "#0f1219",
+      "editorWidget.border": "#1e1e2e",
+      "editorSuggestWidget.background": "#0f1219",
+      "editorSuggestWidget.selectedBackground": "#6366f126",
+      // Bracket match
+      "editorBracketMatch.background": "#6366f11a",
+      "editorBracketMatch.border": "#6366f14d",
+      // Indent guides
+      "editorIndentGuide.background": "#1e1e2e",
+      "editorIndentGuide.activeBackground": "#6366f14d",
+      // Scrollbar
+      "scrollbar.shadow": "#00000000",
+      "scrollbarSlider.background": "#6366f11a",
+      "scrollbarSlider.hoverBackground": "#6366f133",
+      "scrollbarSlider.activeBackground": "#6366f14d",
+    },
+  });
+}
 
 // Dynamically load Monaco to avoid SSR issues
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
@@ -339,28 +413,41 @@ const EditorProjectPage: FC = () => {
 
           {/* Monaco or empty state */}
           {activePath ? (
-            <div className="flex-1 overflow-hidden">
+            <div className="flex-1 overflow-hidden rounded-tr-lg">
               <MonacoEditor
                 height="100%"
                 language={monacoLang}
-                theme="vs-dark"
+                theme="brand-dark"
+                beforeMount={handleBeforeMount}
                 value={fileContent}
                 onChange={handleEditorChange}
                 options={{
                   fontSize: 14,
-                  fontFamily: "var(--font-geist-mono), 'Fira Code', monospace",
-                  minimap: { enabled: true },
+                  lineHeight: 1.6,
+                  fontFamily:
+                    "'JetBrains Mono', 'Fira Code', monospace",
+                  fontLigatures: true,
+                  minimap: { enabled: false },
                   scrollBeyondLastLine: false,
-                  padding: { top: 12, bottom: 12 },
+                  padding: { top: 16, bottom: 16 },
                   lineNumbers: "on",
                   renderLineHighlight: "all",
                   bracketPairColorization: { enabled: true },
                   smoothScrolling: true,
-                  cursorBlinking: "smooth",
+                  cursorBlinking: "expand",
                   cursorSmoothCaretAnimation: "on",
+                  cursorWidth: 2,
                   wordWrap: "on",
                   tabSize: 2,
                   automaticLayout: true,
+                  roundedSelection: true,
+                  overviewRulerLanes: 0,
+                  hideCursorInOverviewRuler: true,
+                  overviewRulerBorder: false,
+                  guides: {
+                    indentation: true,
+                    bracketPairs: true,
+                  },
                 }}
               />
             </div>
