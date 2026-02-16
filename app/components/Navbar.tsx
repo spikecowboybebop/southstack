@@ -63,11 +63,11 @@ export default function Navbar() {
                 <span className="hidden sm:inline">Logout</span>
               </button>
               <Link
-                href="/editor"
+                href="/dashboard"
                 className="group relative inline-flex items-center gap-2 overflow-hidden rounded-lg bg-gradient-to-r from-indigo via-indigo-light to-indigo px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-indigo-glow transition-all hover:shadow-xl hover:shadow-indigo-glow-strong hover:brightness-110"
               >
                 <Sparkles className="h-3.5 w-3.5" />
-                Launch Editor
+                Dashboard
                 {/* Animated shimmer overlay */}
                 <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/10 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
               </Link>

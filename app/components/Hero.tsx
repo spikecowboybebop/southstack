@@ -39,7 +39,7 @@ export default function Hero() {
         ) : isLoggedIn ? (
           /* ── Authenticated CTA ── */
           <Link
-            href="/editor"
+            href="/dashboard"
             className="group relative inline-flex items-center gap-2.5 overflow-hidden rounded-xl bg-gradient-to-r from-indigo via-indigo-light to-indigo px-8 py-3.5 text-base font-semibold text-white shadow-xl shadow-indigo-glow transition-all hover:shadow-2xl hover:shadow-indigo-glow-strong hover:brightness-110"
           >
             <Sparkles className="h-4 w-4" />
