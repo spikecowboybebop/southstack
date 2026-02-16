@@ -2,11 +2,19 @@
  * OPFS (Origin Private File System) handler.
  *
  * Manages a per-project virtual file system using the browser's
- * navigator.storage.getDirectory() API. Each project gets its own
- * top-level directory keyed by projectId.
+ * navigator.storage.getDirectory() API. Files are sandboxed under
+ * a SHA-256 hashed user directory — each user's projects are isolated.
  *
- * All operations are async. Files are stored as UTF-8 text.
+ * Directory structure: OPFS root / <userHash> / <projectId> / …files
+ *
+ * All file content is encrypted with AES-GCM before writing and
+ * decrypted after reading, using an in-memory CryptoKey derived
+ * from the user's password. The key never touches localStorage.
+ *
+ * All operations are async.
  */
+
+import { decryptContent, encryptContent } from "./opfs-crypto";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -23,15 +31,42 @@ export interface FSNode {
 
 // ─── Root Access ────────────────────────────────────────────
 
+/** Regex: valid SHA-256 hex hash (64 lowercase hex chars). */
+const VALID_HASH = /^[0-9a-f]{64}$/;
+
 /**
- * Get the OPFS root for a specific project.
- * Creates the project directory if it doesn't exist.
+ * The "jail" function — returns ONLY the user-scoped subdirectory.
+ *
+ * Instead of handing out the global OPFS root, this function:
+ *   1. Gets the OPFS root via navigator.storage.getDirectory()
+ *   2. Gets or creates a subdirectory named after the userHash
+ *   3. Returns ONLY that subdirectory handle
+ *
+ * All downstream operations therefore cannot escape the user's sandbox.
+ *
+ * @throws Error if userHash is invalid (not a 64-char hex string)
+ */
+export async function getUserDirectoryHandle(
+  userHash: string
+): Promise<FileSystemDirectoryHandle> {
+  if (!VALID_HASH.test(userHash)) {
+    throw new Error("Invalid userHash — expected 64-char hex SHA-256.");
+  }
+  const opfsRoot = await navigator.storage.getDirectory();
+  return opfsRoot.getDirectoryHandle(userHash, { create: true });
+}
+
+/**
+ * Get the OPFS root for a specific project, scoped to a user's
+ * hashed directory: OPFS / <userHash> / <projectId>.
+ * Creates directories if they don't exist.
  */
 async function getProjectRoot(
+  userHash: string,
   projectId: string
 ): Promise<FileSystemDirectoryHandle> {
-  const opfsRoot = await navigator.storage.getDirectory();
-  return opfsRoot.getDirectoryHandle(projectId, { create: true });
+  const userDir = await getUserDirectoryHandle(userHash);
+  return userDir.getDirectoryHandle(projectId, { create: true });
 }
 
 /**
@@ -72,8 +107,8 @@ async function ensureParentDirs(
 /**
  * Read the full directory tree for a project.
  */
-export async function listTree(projectId: string): Promise<FSNode[]> {
-  const root = await getProjectRoot(projectId);
+export async function listTree(userHash: string, projectId: string): Promise<FSNode[]> {
+  const root = await getProjectRoot(userHash, projectId);
   return readDir(root, "");
 }
 
@@ -110,16 +145,24 @@ async function readDir(
 
 /**
  * Read the text content of a file.
+ * If an encryptionKey is provided, the raw content is decrypted.
  */
 export async function readFile(
+  userHash: string,
   projectId: string,
-  filePath: string
+  filePath: string,
+  encryptionKey?: CryptoKey
 ): Promise<string> {
-  const root = await getProjectRoot(projectId);
+  const root = await getProjectRoot(userHash, projectId);
   const { parent, name } = await resolvePath(root, filePath);
   const fileHandle = await parent.getFileHandle(name);
   const file = await fileHandle.getFile();
-  return file.text();
+  const raw = await file.text();
+
+  if (encryptionKey) {
+    return decryptContent(raw, encryptionKey);
+  }
+  return raw;
 }
 
 // ─── Write Operations ───────────────────────────────────────
@@ -127,31 +170,38 @@ export async function readFile(
 /**
  * Write (create or overwrite) a text file.
  * Automatically creates intermediate directories.
+ * If an encryptionKey is provided, content is encrypted before writing.
  */
 export async function writeFile(
+  userHash: string,
   projectId: string,
   filePath: string,
-  content: string
+  content: string,
+  encryptionKey?: CryptoKey
 ): Promise<void> {
-  const root = await getProjectRoot(projectId);
+  const root = await getProjectRoot(userHash, projectId);
   const parentDir = await ensureParentDirs(root, filePath);
   const segments = filePath.split("/").filter(Boolean);
   const fileName = segments[segments.length - 1];
   const fileHandle = await parentDir.getFileHandle(fileName, { create: true });
   const writable = await fileHandle.createWritable();
-  await writable.write(content);
+  const data = encryptionKey ? await encryptContent(content, encryptionKey) : content;
+  await writable.write(data);
   await writable.close();
 }
 
 /**
  * Create a new empty file. Throws if the file already exists.
+ * If an encryptionKey is provided, the initial content is encrypted.
  */
 export async function createFile(
+  userHash: string,
   projectId: string,
   filePath: string,
-  initialContent: string = ""
+  initialContent: string = "",
+  encryptionKey?: CryptoKey
 ): Promise<void> {
-  const root = await getProjectRoot(projectId);
+  const root = await getProjectRoot(userHash, projectId);
   const parentDir = await ensureParentDirs(root, filePath);
   const segments = filePath.split("/").filter(Boolean);
   const fileName = segments[segments.length - 1];
@@ -169,7 +219,10 @@ export async function createFile(
 
   const fileHandle = await parentDir.getFileHandle(fileName, { create: true });
   const writable = await fileHandle.createWritable();
-  await writable.write(initialContent);
+  const data = encryptionKey
+    ? await encryptContent(initialContent, encryptionKey)
+    : initialContent;
+  await writable.write(data);
   await writable.close();
 }
 
@@ -177,10 +230,11 @@ export async function createFile(
  * Create a new directory. Creates intermediate directories as needed.
  */
 export async function createDirectory(
+  userHash: string,
   projectId: string,
   dirPath: string
 ): Promise<void> {
-  const root = await getProjectRoot(projectId);
+  const root = await getProjectRoot(userHash, projectId);
   const segments = dirPath.split("/").filter(Boolean);
   let current = root;
   for (const segment of segments) {
@@ -194,10 +248,11 @@ export async function createDirectory(
  * Delete a file or directory (recursive).
  */
 export async function deleteEntry(
+  userHash: string,
   projectId: string,
   entryPath: string
 ): Promise<void> {
-  const root = await getProjectRoot(projectId);
+  const root = await getProjectRoot(userHash, projectId);
   const segments = entryPath.split("/").filter(Boolean);
   const name = segments.pop()!;
 
@@ -210,15 +265,59 @@ export async function deleteEntry(
 }
 
 /**
+ * Delete an entire project's OPFS directory (all files).
+ * Called when a project is deleted from IndexedDB to clean up storage.
+ */
+export async function deleteProjectOPFS(
+  userHash: string,
+  projectId: string
+): Promise<void> {
+  const userDir = await getUserDirectoryHandle(userHash);
+  try {
+    await userDir.removeEntry(projectId, { recursive: true });
+  } catch {
+    // Directory may not exist — that's fine
+  }
+}
+
+/**
+ * Security check: list ONLY the project directories that exist
+ * inside the authenticated user's hashed directory.
+ *
+ * Any folder or file outside the user's sandbox is silently ignored.
+ * Returns an array of project IDs (directory names) found.
+ */
+export async function listUserProjectIds(
+  userHash: string
+): Promise<string[]> {
+  const userDir = await getUserDirectoryHandle(userHash);
+  const ids: string[] = [];
+
+  for await (const [name, handle] of userDir as unknown as AsyncIterable<
+    [string, FileSystemHandle]
+  >) {
+    // Only include directories (each is a project root)
+    // Files at the user level are ignored (boundary check)
+    if (handle.kind === "directory") {
+      ids.push(name);
+    }
+  }
+
+  return ids;
+}
+
+/**
  * Rename a file or directory by copying + deleting.
  * (OPFS doesn't support native rename.)
+ * For file renames, the raw bytes are copied directly — no re-encryption needed.
  */
 export async function renameEntry(
+  userHash: string,
   projectId: string,
   oldPath: string,
   newPath: string
 ): Promise<void> {
-  const root = await getProjectRoot(projectId);
+  const root = await getProjectRoot(userHash, projectId);
 
   // Determine if it's a file or directory
   const segments = oldPath.split("/").filter(Boolean);
@@ -228,22 +327,31 @@ export async function renameEntry(
     parent = await parent.getDirectoryHandle(segments[i]);
   }
 
-  // Try as file first
+  // Try as file first — copy raw bytes (already encrypted)
   try {
     const fileHandle = await parent.getFileHandle(name);
     const file = await fileHandle.getFile();
-    const content = await file.text();
-    await writeFile(projectId, newPath, content);
-    await deleteEntry(projectId, oldPath);
+    const rawContent = await file.text();
+
+    // Write raw (already encrypted) content to new path
+    const newRoot = await getProjectRoot(userHash, projectId);
+    const newParentDir = await ensureParentDirs(newRoot, newPath);
+    const newSegments = newPath.split("/").filter(Boolean);
+    const newFileName = newSegments[newSegments.length - 1];
+    const newFileHandle = await newParentDir.getFileHandle(newFileName, { create: true });
+    const writable = await newFileHandle.createWritable();
+    await writable.write(rawContent);
+    await writable.close();
+
+    await deleteEntry(userHash, projectId, oldPath);
     return;
   } catch {
-    // Not a file — try as directory (copy not supported for dirs, just rename leaf)
+    // Not a file — try as directory
   }
 
   // For directory rename, we only support renaming leaf directories
-  // (a full recursive copy would be needed for nested renames)
-  await createDirectory(projectId, newPath);
-  await deleteEntry(projectId, oldPath);
+  await createDirectory(userHash, projectId, newPath);
+  await deleteEntry(userHash, projectId, oldPath);
 }
 
 // ─── Language Detection ─────────────────────────────────────

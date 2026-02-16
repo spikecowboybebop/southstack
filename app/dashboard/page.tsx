@@ -7,6 +7,7 @@
  * Redirects to /login if unauthenticated.
  */
 
+import { deleteProjectOPFS } from "@/lib/opfs";
 import {
     createProject,
     deleteProject,
@@ -68,7 +69,7 @@ function timeAgo(isoDate: string): string {
 // ─── Component ──────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const { user, isLoggedIn, mounted, logout } = useAuth();
+  const { user, userHash, isLoggedIn, mounted, logout } = useAuth();
   const router = useRouter();
 
   const [projects, setProjects] = useState<Project[]>([]);
@@ -86,15 +87,16 @@ export default function DashboardPage() {
 
   // ── Load projects from IndexedDB ──
   const loadProjects = useCallback(async () => {
+    if (!userHash) return;
     try {
-      const list = await getAllProjects();
+      const list = await getAllProjects(userHash);
       setProjects(list);
     } catch (err) {
       console.error("Failed to load projects:", err);
     } finally {
       setIsLoadingProjects(false);
     }
-  }, []);
+  }, [userHash]);
 
   useEffect(() => {
     if (mounted && isLoggedIn) {
@@ -104,7 +106,8 @@ export default function DashboardPage() {
 
   // ── Create project handler ──
   async function handleCreate(name: string, language: string) {
-    const project = await createProject(name, language);
+    if (!userHash) return;
+    const project = await createProject(name, language, userHash);
     router.push(`/editor/${project.id}`);
   }
 
@@ -113,6 +116,10 @@ export default function DashboardPage() {
     setDeletingId(id);
     try {
       await deleteProject(id);
+      // Also clean up the OPFS directory for this project
+      if (userHash) {
+        await deleteProjectOPFS(userHash, id);
+      }
       setProjects((prev) => prev.filter((p) => p.id !== id));
     } catch (err) {
       console.error("Failed to delete project:", err);

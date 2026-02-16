@@ -58,6 +58,10 @@ interface SidebarProps {
   onFileSelect: (path: string) => void;
   /** External trigger: bump to re-read the tree */
   refreshKey?: number;
+  /** SHA-256 hash of the username — scopes OPFS storage. */
+  userHash: string;
+  /** AES-GCM key for encrypting file content. */
+  encryptionKey?: CryptoKey;
 }
 
 // ─── Component ──────────────────────────────────────────────
@@ -68,6 +72,8 @@ export default function Sidebar({
   activePath,
   onFileSelect,
   refreshKey,
+  userHash,
+  encryptionKey,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [tree, setTree] = useState<FSNode[]>([]);
@@ -83,14 +89,14 @@ export default function Sidebar({
   // ── Load tree ──
   const loadTree = useCallback(async () => {
     try {
-      const nodes = await listTree(projectId);
+      const nodes = await listTree(userHash, projectId);
       setTree(nodes);
     } catch (err) {
       console.error("Failed to read file tree:", err);
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [userHash, projectId]);
 
   useEffect(() => {
     loadTree();
@@ -136,10 +142,10 @@ export default function Sidebar({
     const fullPath = newEntryParent ? `${newEntryParent}/${name}` : name;
     try {
       if (newEntryKind === "file") {
-        await opfsCreateFile(projectId, fullPath, "");
+        await opfsCreateFile(userHash, projectId, fullPath, "", encryptionKey);
         onFileSelect(fullPath);
       } else {
-        await opfsCreateDir(projectId, fullPath);
+        await opfsCreateDir(userHash, projectId, fullPath);
         setExpanded((p) => new Set(p).add(fullPath));
       }
       await loadTree();
@@ -160,7 +166,7 @@ export default function Sidebar({
   // ── Delete ──
   async function handleDelete(path: string) {
     try {
-      await deleteEntry(projectId, path);
+      await deleteEntry(userHash, projectId, path);
       await loadTree();
     } catch (err) {
       console.error("Delete failed:", err);

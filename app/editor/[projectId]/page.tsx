@@ -126,7 +126,7 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
 // ─── Page ───────────────────────────────────────────────────
 
 const EditorProjectPage: FC = () => {
-  const { user, isLoggedIn, mounted, logout } = useAuth();
+  const { user, userHash, encryptionKey, isLoggedIn, mounted, logout } = useAuth();
   const router = useRouter();
   const params = useParams();
   const projectId = params.projectId as string;
@@ -159,24 +159,24 @@ const EditorProjectPage: FC = () => {
 
   // ── Load project metadata ──
   useEffect(() => {
-    if (!mounted || !isLoggedIn || !projectId) return;
+    if (!mounted || !isLoggedIn || !projectId || !userHash) return;
     (async () => {
       try {
-        const p = await getProject(projectId);
+        const p = await getProject(projectId, userHash);
         if (!p) {
           setNotFound(true);
         } else {
           setProject(p);
 
           // If the OPFS tree is empty, seed it with the project's starter content
-          const tree = await listTree(projectId);
+          const tree = await listTree(userHash, projectId);
           if (tree.length === 0 && p.content) {
             const ext =
               { typescript: "ts", javascript: "js", python: "py", html: "html", css: "css" }[
                 p.language
               ] ?? "txt";
             const mainFile = `main.${ext}`;
-            await writeFile(projectId, mainFile, p.content);
+            await writeFile(userHash, projectId, mainFile, p.content, encryptionKey ?? undefined);
             setRefreshTree((n) => n + 1);
             // Auto-open the seeded file
             setActivePath(mainFile);
@@ -190,14 +190,14 @@ const EditorProjectPage: FC = () => {
         setIsLoading(false);
       }
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted, isLoggedIn, projectId]);
+  }, [mounted, isLoggedIn, projectId, userHash, encryptionKey]);
 
   // ── Open a file ──
   const openFile = useCallback(
     async (path: string) => {
+      if (!userHash) return;
       try {
-        const content = await readFile(projectId, path);
+        const content = await readFile(userHash, projectId, path, encryptionKey ?? undefined);
         setFileContent(content);
         setActivePath(path);
 
@@ -210,9 +210,8 @@ const EditorProjectPage: FC = () => {
         console.error("Failed to open file:", err);
       }
     },
-    [projectId]
+    [projectId, userHash, encryptionKey]
   );
-
   // ── Close a tab ──
   const closeTab = useCallback(
     (path: string) => {
@@ -238,10 +237,10 @@ const EditorProjectPage: FC = () => {
   const saveToOPFS = useCallback(
     async (content: string) => {
       const path = activePathRef.current;
-      if (!path) return;
+      if (!path || !userHash) return;
       setIsSaving(true);
       try {
-        await writeFile(projectId, path, content);
+        await writeFile(userHash, projectId, path, content, encryptionKey ?? undefined);
         setLastSaved(new Date());
         // Clear dirty indicator on this tab
         setTabs((prev) =>
@@ -253,7 +252,7 @@ const EditorProjectPage: FC = () => {
         setIsSaving(false);
       }
     },
-    [projectId]
+    [projectId, userHash, encryptionKey]
   );
 
   function handleEditorChange(value: string | undefined) {
@@ -399,6 +398,8 @@ const EditorProjectPage: FC = () => {
           activePath={activePath}
           onFileSelect={openFile}
           refreshKey={refreshTree}
+          userHash={userHash ?? ""}
+          encryptionKey={encryptionKey ?? undefined}
         />
 
         {/* Editor pane */}

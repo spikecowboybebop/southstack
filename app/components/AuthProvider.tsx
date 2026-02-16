@@ -28,6 +28,12 @@ import {
 
 import { login as doLogin, signup as doSignup } from "@/lib/auth";
 import type { AuthErrorCode } from "@/lib/db";
+import {
+    deriveEncryptionKey,
+    exportKeyHex,
+    hashUsername,
+    importKeyHex,
+} from "@/lib/opfs-crypto";
 import { clearSession, getSession, isSessionValid, type Session } from "@/lib/session";
 
 // ─── Types ──────────────────────────────────────────────────
@@ -37,6 +43,10 @@ export interface AuthState {
   session: Session | null;
   /** The authenticated username, or null. */
   user: string | null;
+  /** SHA-256 hash of the username — used as OPFS folder name. */
+  userHash: string | null;
+  /** AES-GCM encryption key for file content — volatile, never in localStorage. */
+  encryptionKey: CryptoKey | null;
   /** True once the component has mounted on the client (hydration guard). */
   mounted: boolean;
   /** True while the initial session check is running. */
@@ -66,6 +76,9 @@ export interface AuthErrorInfo {
 
 // ─── Context ────────────────────────────────────────────────
 
+const ENC_KEY_STORAGE = "southstack-enc-key";
+const USER_HASH_STORAGE = "southstack-user-hash";
+
 const AuthContext = createContext<AuthState | null>(null);
 
 // ─── Provider ───────────────────────────────────────────────
@@ -76,6 +89,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<AuthErrorInfo | null>(null);
+  const [encryptionKey, setEncryptionKey] = useState<CryptoKey | null>(null);
+  const [userHash, setUserHash] = useState<string | null>(null);
 
   // Hydration guard — marks the client as mounted so auth-dependent
   // UI can safely render without causing a server/client mismatch.
@@ -83,14 +98,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setMounted(true);
   }, []);
 
-  // Check for an existing valid session on mount
+  // Check for an existing valid session on mount.
+  // Restores the encryption key and user hash from sessionStorage.
   useEffect(() => {
-    if (isSessionValid()) {
-      setSession(getSession());
-    } else {
-      clearSession();
+    async function restoreSession() {
+      if (isSessionValid()) {
+        const s = getSession();
+        setSession(s);
+
+        // Restore encryption key + user hash from sessionStorage
+        const keyHex = sessionStorage.getItem(ENC_KEY_STORAGE);
+        const hash = sessionStorage.getItem(USER_HASH_STORAGE);
+
+        if (keyHex && hash) {
+          try {
+            const key = await importKeyHex(keyHex);
+            setEncryptionKey(key);
+            setUserHash(hash);
+          } catch {
+            // Key restore failed — force re-login
+            clearSession();
+            sessionStorage.removeItem(ENC_KEY_STORAGE);
+            sessionStorage.removeItem(USER_HASH_STORAGE);
+            setSession(null);
+          }
+        } else if (s?.username) {
+          // Session exists but no key — compute hash, key stays null
+          // (files may be unreadable until re-login, but user hash is recoverable)
+          const h = await hashUsername(s.username);
+          setUserHash(h);
+        }
+      } else {
+        clearSession();
+        sessionStorage.removeItem(ENC_KEY_STORAGE);
+        sessionStorage.removeItem(USER_HASH_STORAGE);
+      }
+      setIsLoading(false);
     }
-    setIsLoading(false);
+    restoreSession();
   }, []);
 
   // ── Actions ──
@@ -103,6 +148,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const result = await doSignup(username, password);
       setSession(result.session);
+
+      // Derive encryption key + user hash (password is in scope here only)
+      const [key, hash] = await Promise.all([
+        deriveEncryptionKey(password, username),
+        hashUsername(username),
+      ]);
+      setEncryptionKey(key);
+      setUserHash(hash);
+
+      // Persist key material in sessionStorage (tab-scoped, never localStorage)
+      const keyHex = await exportKeyHex(key);
+      sessionStorage.setItem(ENC_KEY_STORAGE, keyHex);
+      sessionStorage.setItem(USER_HASH_STORAGE, hash);
+
       return true;
     } catch (err: unknown) {
       const e = err as { code?: string; message?: string };
@@ -122,6 +181,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const result = await doLogin(username, password);
       setSession(result.session);
+
+      // Derive encryption key + user hash (password is in scope here only)
+      const [key, hash] = await Promise.all([
+        deriveEncryptionKey(password, username),
+        hashUsername(username),
+      ]);
+      setEncryptionKey(key);
+      setUserHash(hash);
+
+      // Persist key material in sessionStorage (tab-scoped, never localStorage)
+      const keyHex = await exportKeyHex(key);
+      sessionStorage.setItem(ENC_KEY_STORAGE, keyHex);
+      sessionStorage.setItem(USER_HASH_STORAGE, hash);
+
       return true;
     } catch (err: unknown) {
       const e = err as { code?: string; message?: string };
@@ -138,7 +211,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     clearSession();
     setSession(null);
+    setEncryptionKey(null);
+    setUserHash(null);
     setError(null);
+
+    // Wipe encryption key from sessionStorage
+    sessionStorage.removeItem(ENC_KEY_STORAGE);
+    sessionStorage.removeItem(USER_HASH_STORAGE);
   }, []);
 
   // ── Memo ──
@@ -149,6 +228,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       session,
       user: session?.username ?? null,
+      userHash,
+      encryptionKey,
       mounted,
       isLoading,
       isSubmitting,
@@ -160,7 +241,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       logout,
     }),
-    [session, mounted, isLoading, isSubmitting, isAuthenticated, error, clearError, signup, login, logout]
+    [session, userHash, encryptionKey, mounted, isLoading, isSubmitting, isAuthenticated, error, clearError, signup, login, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

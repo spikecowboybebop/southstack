@@ -2,11 +2,14 @@
  * IndexedDB persistence layer for projects.
  *
  * Separate database from auth — keeps concerns isolated.
- * Each project: { id, name, language, content, lastModified }
+ * Each project is scoped to a user via the `owner` field (SHA-256 userHash).
+ * Only projects belonging to the current user are returned by queries.
  */
 
 export interface Project {
   id: string;
+  /** SHA-256 hash of the owning username — scopes projects to users. */
+  owner: string;
   name: string;
   language: string;
   content: string;
@@ -14,7 +17,7 @@ export interface Project {
 }
 
 const DB_NAME = "southstack-projects";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // bumped for owner index
 const STORE_NAME = "projects";
 
 // ─── Database Initialization ────────────────────────────────
@@ -25,9 +28,19 @@ function openDB(): Promise<IDBDatabase> {
 
     request.onupgradeneeded = () => {
       const db = request.result;
+      let store: IDBObjectStore;
+
       if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: "id" });
+        store = db.createObjectStore(STORE_NAME, { keyPath: "id" });
         store.createIndex("lastModified", "lastModified", { unique: false });
+      } else {
+        // Re-use existing store from the upgrade transaction
+        store = request.transaction!.objectStore(STORE_NAME);
+      }
+
+      // Add the owner index if it doesn't exist (migration from v1 → v2)
+      if (!store.indexNames.contains("owner")) {
+        store.createIndex("owner", "owner", { unique: false });
       }
     };
 
@@ -51,15 +64,16 @@ export function generateId(): string {
 // ─── CRUD Operations ────────────────────────────────────────
 
 /**
- * Get all projects, sorted by lastModified descending (newest first).
+ * Get all projects for a specific user, sorted by lastModified descending.
  */
-export async function getAllProjects(): Promise<Project[]> {
+export async function getAllProjects(owner: string): Promise<Project[]> {
   const db = await openDB();
 
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
-    const request = store.getAll();
+    const index = store.index("owner");
+    const request = index.getAll(owner);
 
     request.onsuccess = () => {
       const projects = (request.result as Project[]).sort(
@@ -75,8 +89,9 @@ export async function getAllProjects(): Promise<Project[]> {
 
 /**
  * Get a single project by ID.
+ * Returns null if the project doesn't exist or belongs to a different user.
  */
-export async function getProject(id: string): Promise<Project | null> {
+export async function getProject(id: string, owner?: string): Promise<Project | null> {
   const db = await openDB();
 
   return new Promise((resolve, reject) => {
@@ -84,23 +99,33 @@ export async function getProject(id: string): Promise<Project | null> {
     const store = tx.objectStore(STORE_NAME);
     const request = store.get(id);
 
-    request.onsuccess = () => resolve((request.result as Project) ?? null);
+    request.onsuccess = () => {
+      const project = (request.result as Project) ?? null;
+      // If an owner is specified, enforce ownership check
+      if (project && owner && project.owner !== owner) {
+        resolve(null);
+        return;
+      }
+      resolve(project);
+    };
     request.onerror = () => reject(request.error);
     tx.oncomplete = () => db.close();
   });
 }
 
 /**
- * Create a new project and return it.
+ * Create a new project scoped to a user and return it.
  */
 export async function createProject(
   name: string,
-  language: string = "typescript"
+  language: string = "typescript",
+  owner: string
 ): Promise<Project> {
   const db = await openDB();
 
   const project: Project = {
     id: generateId(),
+    owner,
     name: name.trim(),
     language,
     content: getDefaultContent(name.trim(), language),
