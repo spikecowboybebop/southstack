@@ -108,7 +108,8 @@ export default function DashboardPage() {
   async function handleCreate(name: string, language: string) {
     if (!userHash) return;
     const project = await createProject(name, language, userHash);
-    router.push(`/editor/${project.id}`);
+    // Full page reload — guarantees a fresh WebContainer with no ghost files
+    window.location.assign(`/editor/${project.id}`);
   }
 
   // ── Delete project handler ──
@@ -264,9 +265,13 @@ export default function DashboardPage() {
                 key={project.id}
                 className="group relative flex flex-col rounded-2xl border border-border bg-surface transition-all hover:border-border-light hover:bg-surface-light hover:shadow-lg hover:shadow-indigo-glow/50"
               >
-                {/* Card body — clickable */}
-                <Link
+                {/* Card body — clickable (full reload to reset WebContainer) */}
+                <a
                   href={`/editor/${project.id}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    window.location.assign(`/editor/${project.id}`);
+                  }}
                   className="flex flex-1 flex-col p-6"
                 >
                   {/* Top row: icon + language badge */}
@@ -294,17 +299,21 @@ export default function DashboardPage() {
                     <Clock className="h-3 w-3" />
                     Last edited {timeAgo(project.lastModified)}
                   </div>
-                </Link>
+                </a>
 
                 {/* Action row */}
                 <div className="flex items-center justify-between border-t border-border px-6 py-3">
-                  <Link
+                  <a
                     href={`/editor/${project.id}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      window.location.assign(`/editor/${project.id}`);
+                    }}
                     className="flex items-center gap-1.5 text-xs font-medium text-indigo transition-colors hover:text-indigo-light"
                   >
                     <FolderOpen className="h-3 w-3" />
                     Open
-                  </Link>
+                  </a>
                   <button
                     onClick={(e) => {
                       e.preventDefault();

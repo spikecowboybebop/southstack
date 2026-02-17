@@ -13,19 +13,37 @@ import {
     readFile,
     writeFile,
 } from "@/lib/opfs";
+import { OPFSWriteQueue } from "@/lib/opfs-write-queue";
 import { getProject, type Project } from "@/lib/projects";
+import {
+    readPackageScripts,
+    rehydrateProject,
+    spawnNpmScript,
+    switchProject,
+    syncDeleteInContainer,
+    syncDirToContainer,
+    syncFileToContainer,
+    teardownProject,
+    useWebContainer,
+    type RehydrationPhase
+} from "@/lib/useWebContainer";
+import { WCSyncManager } from "@/lib/wc-sync-manager";
 import { useAuth } from "../../components/AuthProvider";
 import Sidebar from "../../components/editor/Sidebar";
 import TabBar, { type TabItem } from "../../components/editor/TabBar";
 
 import type { Monaco } from "@monaco-editor/react";
+import type { WebContainerProcess } from "@webcontainer/api";
 import {
     ArrowLeft,
     Code2,
+    ExternalLink,
     FileCode,
     Loader2,
     LogOut,
+    Play,
     Save,
+    Square,
     Terminal,
     WifiOff,
 } from "lucide-react";
@@ -35,10 +53,12 @@ import { useParams, useRouter } from "next/navigation";
 import {
     useCallback,
     useEffect,
+    useMemo,
     useRef,
     useState,
     type FC,
 } from "react";
+import type { WebTerminalHandle } from "../../components/editor/WebTerminal";
 
 // ─── Custom Monaco Theme ────────────────────────────────────
 
@@ -123,6 +143,12 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
   ),
 });
 
+// Dynamically load WebTerminal (depends on xterm which is browser-only)
+const WebTerminal = dynamic(
+  () => import("../../components/editor/WebTerminal"),
+  { ssr: false }
+);
+
 // ─── Page ───────────────────────────────────────────────────
 
 const EditorProjectPage: FC = () => {
@@ -130,6 +156,10 @@ const EditorProjectPage: FC = () => {
   const router = useRouter();
   const params = useParams();
   const projectId = params.projectId as string;
+
+  // WebContainer
+  const { instance: wc, isBooting: wcBooting } = useWebContainer();
+  const [wcMounted, setWcMounted] = useState(false);
 
   // Project meta from IndexedDB
   const [project, setProject] = useState<Project | null>(null);
@@ -143,9 +173,24 @@ const EditorProjectPage: FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [refreshTree, setRefreshTree] = useState(0);
+  const [availableScripts, setAvailableScripts] = useState<string[]>([]);
+  const [runningScript, setRunningScript] = useState<string | null>(null);
+  const [serverProcessId, setServerProcessId] = useState<string | null>(null);
+  const [isStartingServer, setIsStartingServer] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewPort, setPreviewPort] = useState<number | null>(null);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activePathRef = useRef<string | null>(null);
+  const serverProcessRef = useRef<WebContainerProcess | null>(null);
+  const isFlushing = useRef(false);
+
+  // Project init & sync manager
+  const [rehydrationPhase, setRehydrationPhase] = useState<RehydrationPhase | null>(null);
+  const terminalRef = useRef<WebTerminalHandle>(null);
+  const syncManagerRef = useRef<WCSyncManager | null>(null);
+  const writeQueue = useMemo(() => new OPFSWriteQueue(), []);
+  const mountedProjectRef = useRef<string | null>(null);
 
   // Keep ref in sync for the save callback closure
   useEffect(() => {
@@ -156,6 +201,100 @@ const EditorProjectPage: FC = () => {
   useEffect(() => {
     if (mounted && !isLoggedIn) router.replace("/login");
   }, [mounted, isLoggedIn, router]);
+
+  // ── Listen for servers becoming ready (Express/Vite/etc.) ──
+  useEffect(() => {
+    if (!wc) return;
+
+    const unsubscribe = wc.on("server-ready", (port, url) => {
+      setPreviewPort(port);
+      setPreviewUrl(url);
+      setIsStartingServer(false);
+    });
+
+    return () => {
+      if (typeof unsubscribe === "function") {
+        unsubscribe();
+      }
+    };
+  }, [wc]);
+
+  // ── Read package.json scripts from the WebContainer ──
+  const refreshScripts = useCallback(async () => {
+    if (!wc || !wcMounted) {
+      setAvailableScripts([]);
+      return;
+    }
+    const scripts = await readPackageScripts(wc);
+    setAvailableScripts(Object.keys(scripts));
+  }, [wc, wcMounted]);
+
+  useEffect(() => {
+    refreshScripts();
+  }, [refreshScripts]);
+
+  // ── Run / stop server process ──
+  const runServerScript = useCallback(
+    async (scriptName: "dev" | "start") => {
+      if (!wc || !availableScripts.includes(scriptName)) return;
+
+      // Stop existing server process first
+      if (serverProcessRef.current) {
+        try {
+          serverProcessRef.current.kill();
+        } catch {
+          // Ignore if already exited
+        }
+      }
+
+      setPreviewUrl(null);
+      setPreviewPort(null);
+      setIsStartingServer(true);
+      setRunningScript(scriptName);
+
+      try {
+        const process = await spawnNpmScript(wc, scriptName);
+        serverProcessRef.current = process;
+        setServerProcessId(`${scriptName}-${Date.now()}`);
+
+        process.exit
+          .then(() => {
+            if (serverProcessRef.current === process) {
+              serverProcessRef.current = null;
+              setRunningScript(null);
+              setServerProcessId(null);
+              setIsStartingServer(false);
+            }
+          })
+          .catch(() => {
+            if (serverProcessRef.current === process) {
+              serverProcessRef.current = null;
+              setRunningScript(null);
+              setServerProcessId(null);
+              setIsStartingServer(false);
+            }
+          });
+      } catch (err) {
+        console.error(`Failed to run npm script: ${scriptName}`, err);
+        serverProcessRef.current = null;
+        setRunningScript(null);
+        setServerProcessId(null);
+        setIsStartingServer(false);
+      }
+    },
+    [wc, availableScripts]
+  );
+
+  const stopServer = useCallback(() => {
+    if (!serverProcessRef.current) return;
+    teardownProject(serverProcessRef.current);
+    serverProcessRef.current = null;
+    setRunningScript(null);
+    setServerProcessId(null);
+    setIsStartingServer(false);
+  }, []);
+
+  // (server cleanup on unmount is handled by the combined teardown effect above)
 
   // ── Load project metadata ──
   useEffect(() => {
@@ -182,6 +321,13 @@ const EditorProjectPage: FC = () => {
             setActivePath(mainFile);
             setTabs([{ path: mainFile }]);
             setFileContent(p.content);
+
+            // Sync the seeded file into WebContainer if already booted
+            if (wc) {
+              syncFileToContainer(wc, mainFile, p.content).catch((err) =>
+                console.warn("[sync] Failed to seed file in container:", err)
+              );
+            }
           }
         }
       } catch {
@@ -190,7 +336,159 @@ const EditorProjectPage: FC = () => {
         setIsLoading(false);
       }
     })();
-  }, [mounted, isLoggedIn, projectId, userHash, encryptionKey]);
+  }, [mounted, isLoggedIn, projectId, userHash, encryptionKey, wc]);
+
+  // ── Sidebar → WebContainer sync callbacks ──
+  const handleSidebarFileCreated = useCallback(
+    (path: string, content: string) => {
+      if (!wc) return;
+      syncFileToContainer(wc, path, content).catch((err) =>
+        console.warn("[sync] Failed to mirror new file to container:", err)
+      );
+    },
+    [wc]
+  );
+
+  const handleSidebarFolderCreated = useCallback(
+    (path: string) => {
+      if (!wc) return;
+      syncDirToContainer(wc, path).catch((err) =>
+        console.warn("[sync] Failed to mirror new folder to container:", err)
+      );
+    },
+    [wc]
+  );
+
+  const handleSidebarEntryDeleted = useCallback(
+    (path: string) => {
+      if (!wc) return;
+      syncDeleteInContainer(wc, path).catch((err) =>
+        console.warn("[sync] Failed to mirror deletion to container:", err)
+      );
+    },
+    [wc]
+  );
+
+  // ── Mount OPFS project files + auto npm install (handles project switching) ──
+  useEffect(() => {
+    if (!wc || !project || !userHash) return;
+
+    const isSwitch = mountedProjectRef.current !== null && mountedProjectRef.current !== projectId;
+    const isFirstMount = mountedProjectRef.current === null && !wcMounted;
+
+    // Nothing to do if this project is already mounted
+    if (!isFirstMount && !isSwitch) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const terminal = terminalRef.current?.terminal ?? null;
+        const shellProc = terminalRef.current?.shellProcess ?? null;
+
+        // ── If switching projects, tear down the old session first ──
+        if (isSwitch) {
+          // 1. Stop the sync manager for the old project
+          if (syncManagerRef.current) {
+            await syncManagerRef.current.stop();
+            syncManagerRef.current = null;
+          }
+
+          // 2. Reset editor state for the new project
+          setWcMounted(false);
+          setAvailableScripts([]);
+          setRunningScript(null);
+          setServerProcessId(null);
+          setIsStartingServer(false);
+          setPreviewUrl(null);
+          setPreviewPort(null);
+          setActivePath(null);
+          setTabs([]);
+          setFileContent("");
+
+          // 3. switchProject: kill processes → wipe FS → clear terminal → mount + npm install
+          await switchProject({
+            instance: wc,
+            shellProcess: shellProc,
+            serverProcess: serverProcessRef.current,
+            userHash,
+            projectId,
+            encryptionKey: encryptionKey ?? undefined,
+            terminal,
+            callbacks: {
+              onPhase: (phase) => {
+                if (!cancelled) setRehydrationPhase(phase);
+              },
+              onInstallError: (code) => {
+                console.warn(`npm install exited with code ${code}`);
+              },
+            },
+          });
+
+          serverProcessRef.current = null;
+
+          // 4. Spawn a fresh jsh shell (after FS is ready)
+          if (!cancelled) {
+            await terminalRef.current?.resetShell();
+          }
+        } else {
+          // ── First mount — just rehydrate ──
+          await rehydrateProject(
+            wc,
+            userHash,
+            projectId,
+            encryptionKey ?? undefined,
+            terminal,
+            {
+              onPhase: (phase) => {
+                if (!cancelled) setRehydrationPhase(phase);
+              },
+              onInstallError: (code) => {
+                console.warn(`npm install exited with code ${code}`);
+              },
+            }
+          );
+        }
+
+        if (!cancelled) {
+          mountedProjectRef.current = projectId;
+          setWcMounted(true);
+
+          // Start the sync manager for the new project
+          const mgr = new WCSyncManager(wc, writeQueue, {
+            userHash,
+            projectId,
+            encryptionKey: encryptionKey ?? undefined,
+            writeFileToOPFS: writeFile,
+            onSyncBack: (path) => {
+              console.info(`[SyncManager] Synced back: ${path}`);
+              setRefreshTree((n) => n + 1);
+            },
+          });
+          syncManagerRef.current = mgr;
+          mgr.start();
+        }
+      } catch (err) {
+        console.error("Failed to mount/switch project:", err);
+        if (!cancelled) setRehydrationPhase("error");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [wc, project, userHash, projectId, encryptionKey, wcMounted, writeQueue]);
+
+  // ── Cleanup: stop sync manager + teardown processes on unmount ──
+  useEffect(() => {
+    return () => {
+      syncManagerRef.current?.stop();
+      syncManagerRef.current = null;
+      teardownProject(serverProcessRef.current);
+      serverProcessRef.current = null;
+      mountedProjectRef.current = null;
+    };
+  }, []);
 
   // ── Open a file ──
   const openFile = useCallback(
@@ -233,7 +531,7 @@ const EditorProjectPage: FC = () => {
     [activePath, openFile]
   );
 
-  // ── Auto-save to OPFS (1s debounce) ──
+  // ── Auto-save to OPFS (1s debounce) + real-time container sync ──
   const saveToOPFS = useCallback(
     async (content: string) => {
       const path = activePathRef.current;
@@ -246,13 +544,24 @@ const EditorProjectPage: FC = () => {
         setTabs((prev) =>
           prev.map((t) => (t.path === path ? { ...t, dirty: false } : t))
         );
+
+        // Mirror the write into WebContainer so terminal sees it immediately
+        if (wc) {
+          syncFileToContainer(wc, path, content).catch((err) =>
+            console.warn("[sync] Failed to mirror file to container:", err)
+          );
+
+          if (path === "package.json") {
+            refreshScripts();
+          }
+        }
       } catch (err) {
         console.error("Auto-save failed:", err);
       } finally {
         setIsSaving(false);
       }
     },
-    [projectId, userHash, encryptionKey]
+    [projectId, userHash, encryptionKey, wc, refreshScripts]
   );
 
   function handleEditorChange(value: string | undefined) {
@@ -272,6 +581,51 @@ const EditorProjectPage: FC = () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => saveToOPFS(v), 1000);
   }
+
+  // ── Flush unsaved changes + navigate (full reload) ──
+  const flushAndNavigate = useCallback(
+    async (url: string) => {
+      if (isFlushing.current) return;
+      isFlushing.current = true;
+
+      try {
+        // 1. Fire any pending debounced save immediately
+        if (saveTimerRef.current) {
+          clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = null;
+        }
+        const pendingPath = activePathRef.current;
+        if (pendingPath && userHash && fileContent) {
+          await writeFile(
+            userHash,
+            projectId,
+            pendingPath,
+            fileContent,
+            encryptionKey ?? undefined
+          );
+        }
+
+        // 2. Flush the OPFS write queue (sync-manager backlog)
+        await writeQueue.flush();
+
+        // 3. Stop the sync manager
+        if (syncManagerRef.current) {
+          await syncManagerRef.current.stop();
+          syncManagerRef.current = null;
+        }
+
+        // 4. Kill server process
+        teardownProject(serverProcessRef.current);
+        serverProcessRef.current = null;
+      } catch (err) {
+        console.warn("[flushAndNavigate] Flush error (navigating anyway):", err);
+      }
+
+      // 5. Full page reload — destroys the WebContainer JS heap
+      window.location.assign(url);
+    },
+    [userHash, projectId, encryptionKey, fileContent, writeQueue]
+  );
 
   // Cleanup timer
   useEffect(() => {
@@ -309,12 +663,16 @@ const EditorProjectPage: FC = () => {
         <p className="mb-6 text-sm text-muted">
           The project you&apos;re looking for doesn&apos;t exist or was deleted.
         </p>
-        <Link
+        <a
           href="/dashboard"
+          onClick={(e) => {
+            e.preventDefault();
+            flushAndNavigate("/dashboard");
+          }}
           className="text-sm text-indigo transition-colors hover:text-indigo-light"
         >
           ← Back to Dashboard
-        </Link>
+        </a>
       </div>
     );
   }
@@ -328,13 +686,17 @@ const EditorProjectPage: FC = () => {
       {/* ─── Top bar ─── */}
       <header className="flex items-center justify-between border-b border-border bg-surface px-4 py-2 sm:px-5">
         <div className="flex items-center gap-3">
-          <Link
+          <a
             href="/dashboard"
+            onClick={(e) => {
+              e.preventDefault();
+              flushAndNavigate("/dashboard");
+            }}
             className="flex items-center gap-1.5 text-sm text-muted transition-colors hover:text-foreground"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Dashboard</span>
-          </Link>
+          </a>
 
           <div className="h-4 w-px bg-border" />
 
@@ -375,12 +737,59 @@ const EditorProjectPage: FC = () => {
             Offline Ready
           </span>
 
+          {availableScripts.includes("dev") && (
+            <button
+              onClick={() => runServerScript("dev")}
+              className="hidden items-center gap-1 rounded-md border border-border-light px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground sm:flex"
+            >
+              <Play className="h-3 w-3" />
+              Run dev
+            </button>
+          )}
+
+          {availableScripts.includes("start") && (
+            <button
+              onClick={() => runServerScript("start")}
+              className="hidden items-center gap-1 rounded-md border border-border-light px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground sm:flex"
+            >
+              <Play className="h-3 w-3" />
+              Run start
+            </button>
+          )}
+
+          {runningScript && (
+            <button
+              onClick={stopServer}
+              className="hidden items-center gap-1 rounded-md border border-red-400/30 px-2 py-1 text-[11px] text-red-300 transition-colors hover:text-red-200 sm:flex"
+            >
+              <Square className="h-3 w-3" />
+              Stop
+            </button>
+          )}
+
+          {previewUrl && (
+            <button
+              onClick={() => window.open(previewUrl, "_blank", "noopener,noreferrer")}
+              className="hidden items-center gap-1 rounded-md border border-indigo/40 px-2 py-1 text-[11px] text-indigo-light transition-colors hover:text-indigo sm:flex"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Preview
+              {previewPort ? ` :${previewPort}` : ""}
+            </button>
+          )}
+
+          {(isStartingServer || serverProcessId) && (
+            <span className="hidden text-[10px] text-muted lg:block">
+              {isStartingServer ? "Starting server…" : `PID ${serverProcessId}`}
+            </span>
+          )}
+
           <span className="hidden max-w-[160px] truncate text-[11px] text-muted sm:block">{user}</span>
 
           <button
-            onClick={() => {
+            onClick={async () => {
+              await flushAndNavigate("/").catch(() => {});
               logout();
-              router.replace("/");
             }}
             className="rounded-md border border-border-light px-2.5 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground"
           >
@@ -400,6 +809,9 @@ const EditorProjectPage: FC = () => {
           refreshKey={refreshTree}
           userHash={userHash ?? ""}
           encryptionKey={encryptionKey ?? undefined}
+          onFileCreated={handleSidebarFileCreated}
+          onFolderCreated={handleSidebarFolderCreated}
+          onEntryDeleted={handleSidebarEntryDeleted}
         />
 
         {/* Editor pane */}
@@ -499,9 +911,40 @@ const EditorProjectPage: FC = () => {
                   </span>
                 </>
               )}
+              <span className="flex items-center gap-1">
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    wc
+                      ? "bg-emerald-400"
+                      : wcBooting
+                        ? "bg-amber-400 animate-pulse"
+                        : "bg-zinc-500"
+                  }`}
+                />
+                {wc ? "Container" : wcBooting ? "Booting…" : "No Container"}
+              </span>
+              {rehydrationPhase && rehydrationPhase !== "ready" && (
+                <span className="flex items-center gap-1">
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      rehydrationPhase === "error"
+                        ? "bg-red-400"
+                        : "bg-amber-400 animate-pulse"
+                    }`}
+                  />
+                  {rehydrationPhase === "mounting"
+                    ? "Mounting…"
+                    : rehydrationPhase === "installing"
+                      ? "Installing…"
+                      : "Install Error"}
+                </span>
+              )}
               <span>OPFS</span>
             </div>
           </div>
+
+          {/* WebContainer Terminal */}
+          {wc && <WebTerminal ref={terminalRef} instance={wc} />}
         </div>
       </div>
     </div>

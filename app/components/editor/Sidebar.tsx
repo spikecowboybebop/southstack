@@ -62,6 +62,12 @@ interface SidebarProps {
   userHash: string;
   /** AES-GCM key for encrypting file content. */
   encryptionKey?: CryptoKey;
+  /** Called after a new file is created in OPFS (path, content). */
+  onFileCreated?: (path: string, content: string) => void;
+  /** Called after a new folder is created in OPFS. */
+  onFolderCreated?: (path: string) => void;
+  /** Called after a file or folder is deleted from OPFS. */
+  onEntryDeleted?: (path: string) => void;
 }
 
 // ─── Component ──────────────────────────────────────────────
@@ -74,6 +80,9 @@ export default function Sidebar({
   refreshKey,
   userHash,
   encryptionKey,
+  onFileCreated,
+  onFolderCreated,
+  onEntryDeleted,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [tree, setTree] = useState<FSNode[]>([]);
@@ -144,9 +153,11 @@ export default function Sidebar({
       if (newEntryKind === "file") {
         await opfsCreateFile(userHash, projectId, fullPath, "", encryptionKey);
         onFileSelect(fullPath);
+        onFileCreated?.(fullPath, "");
       } else {
         await opfsCreateDir(userHash, projectId, fullPath);
         setExpanded((p) => new Set(p).add(fullPath));
+        onFolderCreated?.(fullPath);
       }
       await loadTree();
     } catch (err) {
@@ -167,6 +178,7 @@ export default function Sidebar({
   async function handleDelete(path: string) {
     try {
       await deleteEntry(userHash, projectId, path);
+      onEntryDeleted?.(path);
       await loadTree();
     } catch (err) {
       console.error("Delete failed:", err);
