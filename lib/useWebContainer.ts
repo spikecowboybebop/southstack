@@ -30,23 +30,60 @@ import type { Terminal as XTermTerminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 
 import { listTree, readFile, type FSNode } from "./opfs";
+import {
+    REACT_STARTER_FILES,
+    REACT_STARTER_TEMPLATE,
+} from "./react-starter-template";
 
 // ─── Singleton ──────────────────────────────────────────────
+//
+// WebContainer.boot() MUST be called exactly once per page load.
+// Calling it a second time throws: "WebContainer already booted".
+// The Service Worker it registers is tied to this single instance.
+// We enforce this with a module-level singleton + dedup promise.
+//
+// Lifecycle guarantees:
+//   1. First call  → starts boot, caches the promise.
+//   2. Concurrent  → same promise returned (dedup).
+//   3. After boot  → returns the cached instance immediately.
+//   4. After reset → next call boots a fresh instance.
+//
+// The Service Worker is automatically registered by the
+// @webcontainer/api SDK during boot(). We never manually call
+// navigator.serviceWorker.register() — the SDK handles it.
+// ─────────────────────────────────────────────────────────────
 
 let _instance: WebContainer | null = null;
 let _bootPromise: Promise<WebContainer> | null = null;
+let _bootCount = 0; // diagnostic: how many boots this page has seen
 
 /**
  * Boot or return the existing WebContainer.
  * WebContainer.boot() can only be called ONCE per page — this
  * guarantees we never call it twice.
+ *
+ * The internal Service Worker lifecycle is managed by the SDK:
+ *   - On boot, the SDK registers a SW on the preview origin.
+ *   - The SW intercepts fetch requests to *.webcontainer-api.io
+ *     and proxies them to the in-browser Node.js server.
+ *   - The SW must be active + claiming clients before preview
+ *     URLs are opened — hence the `waitForPreview()` ping utility.
  */
 async function getOrBoot(): Promise<WebContainer> {
   if (_instance) return _instance;
   if (_bootPromise) return _bootPromise;
 
+  _bootCount++;
+  if (_bootCount > 1) {
+    console.warn(
+      `[WebContainer] boot() called ${_bootCount} times on this page. ` +
+      `This should only happen after an explicit resetSingleton() call.`
+    );
+  }
+
   _bootPromise = WebContainer.boot().then((wc) => {
     _instance = wc;
+    console.info("[WebContainer] Booted successfully (singleton).");
     return wc;
   });
 
@@ -420,6 +457,136 @@ export async function rehydrateProject(
   }
 
   return installProcess;
+}
+
+// ─── Zero-Config Project Initialization ─────────────────────
+
+export interface InitializeProjectCallbacks {
+  /** Called when the phase changes (same phases as rehydration). */
+  onPhase?: (phase: RehydrationPhase) => void;
+  /** Called if npm install exits with a non-zero code. */
+  onInstallError?: (exitCode: number) => void;
+  /** Called after the React starter template is seeded. */
+  onTemplateSeeded?: (files: Record<string, string>) => void;
+}
+
+/**
+ * Project initialization for empty projects:
+ *
+ *   1. **Check emptiness** — reads the container FS root. If files
+ *      already exist (from OPFS rehydration), returns early.
+ *
+ *   2. **Mount React starter** — if the project is empty, mounts
+ *      the pre-built React + Vite template (package.json, index.html,
+ *      vite.config.js, src/App.jsx, etc.) into the container.
+ *
+ *   3. **Persist to OPFS** — calls `writeFileToOPFS` for each seeded
+ *      file so the template survives page reloads.
+ *
+ *   4. **npm install** — runs `npm install` and pipes output to the
+ *      terminal so the user sees real-time progress.
+ *
+ * The user manually starts `npm run dev` and refreshes the preview.
+ */
+export async function initializeProject(
+  instance: WebContainer,
+  userHash: string,
+  projectId: string,
+  terminal: XTermTerminal | null,
+  writeFileToOPFS: (
+    userHash: string,
+    projectId: string,
+    path: string,
+    content: string,
+    key?: CryptoKey
+  ) => Promise<void>,
+  encryptionKey?: CryptoKey,
+  callbacks?: InitializeProjectCallbacks,
+): Promise<void> {
+  const { onPhase, onInstallError, onTemplateSeeded } =
+    callbacks ?? {};
+
+  // ── Step 1: Check if the container FS is empty ──
+  let entries: string[];
+  try {
+    entries = await instance.fs.readdir("/");
+  } catch {
+    entries = [];
+  }
+
+  // If files already exist, the project was rehydrated from OPFS —
+  // no need to seed a template.
+  if (entries.length > 0) {
+    console.info(
+      "[initializeProject] Project already has files — skipping template seed."
+    );
+    return;
+  }
+
+  // ── Step 2: Mount React starter template ──
+  terminal?.writeln(
+    "\r\n\x1b[1;36m▶ Empty project detected — seeding React + Vite starter…\x1b[0m\r\n"
+  );
+  onPhase?.("mounting");
+
+  await instance.mount(REACT_STARTER_TEMPLATE);
+
+  console.info(
+    "[initializeProject] Mounted React starter template into WebContainer."
+  );
+
+  // ── Step 3: Persist template files to OPFS ──
+  const fileEntries = Object.entries(REACT_STARTER_FILES);
+  for (const [path, content] of fileEntries) {
+    try {
+      await writeFileToOPFS(
+        userHash,
+        projectId,
+        path,
+        content,
+        encryptionKey
+      );
+    } catch (err) {
+      console.warn(`[initializeProject] Failed to persist ${path} to OPFS:`, err);
+    }
+  }
+
+  terminal?.writeln(
+    `\x1b[2m   Seeded ${fileEntries.length} files into project.\x1b[0m\r\n`
+  );
+  onTemplateSeeded?.(REACT_STARTER_FILES);
+
+  // ── Step 4: npm install ──
+  onPhase?.("installing");
+  terminal?.writeln("\x1b[1;36m▶ Running npm install…\x1b[0m\r\n");
+
+  const installProcess = await instance.spawn("npm", ["install"]);
+
+  // Pipe install output → terminal
+  installProcess.output.pipeTo(
+    new WritableStream({
+      write(data) {
+        terminal?.write(data);
+      },
+    })
+  );
+
+  const exitCode = await installProcess.exit;
+
+  if (exitCode !== 0) {
+    terminal?.writeln(
+      `\r\n\x1b[1;31m✗ npm install exited with code ${exitCode}\x1b[0m\r\n`
+    );
+    onInstallError?.(exitCode);
+    onPhase?.("error");
+    return;
+  }
+
+  terminal?.writeln("\r\n\x1b[1;32m✓ npm install complete\x1b[0m\r\n");
+  terminal?.writeln(
+    "\x1b[2m   Run 'npm run dev' to start the dev server, then refresh the preview.\x1b[0m\r\n"
+  );
+  onPhase?.("ready");
 }
 
 // ─── Teardown ────────────────────────────────────────────────
