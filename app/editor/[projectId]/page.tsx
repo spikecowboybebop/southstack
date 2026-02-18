@@ -34,10 +34,12 @@ import { useAuth } from "../../components/AuthProvider";
 import Sidebar from "../../components/editor/Sidebar";
 import TabBar, { type TabItem } from "../../components/editor/TabBar";
 
+import type { FileAction } from "@/lib/ai-parser";
 import type { Monaco } from "@monaco-editor/react";
 import type { WebContainerProcess } from "@webcontainer/api";
 import {
     ArrowLeft,
+    Bot,
     Code2,
     FileCode,
     Loader2,
@@ -158,6 +160,12 @@ const PreviewPane = dynamic(
   { ssr: false }
 );
 
+// Dynamically load ChatSidebar (AI chat panel)
+const ChatSidebar = dynamic(
+  () => import("../../components/editor/ChatSidebar"),
+  { ssr: false }
+);
+
 // ─── Page ───────────────────────────────────────────────────
 
 const EditorProjectPage: FC = () => {
@@ -195,6 +203,7 @@ const EditorProjectPage: FC = () => {
   }
   const [activePorts, setActivePorts] = useState<ActivePort[]>([]);
   const [showPreviewPane, setShowPreviewPane] = useState(false); // iframe preview panel
+  const [showAIChat, setShowAIChat] = useState(false); // AI chat sidebar
 
   // ── Resizable split pane ──
   const [splitPercent, setSplitPercent] = useState(50); // editor width as % of container
@@ -660,6 +669,41 @@ const EditorProjectPage: FC = () => {
     [wc, refreshScripts]
   );
 
+  // ── AI Agent: apply file action ──
+  const handleApplyFileAction = useCallback(
+    async (action: FileAction) => {
+      if (!userHash) return;
+      try {
+        // Write to OPFS
+        await writeFile(userHash, projectId, action.path, action.content, encryptionKey ?? undefined);
+        // Sync to WebContainer
+        syncToContainer(action.path, action.content);
+        // If this file is currently open, update the editor
+        if (action.path === activePathRef.current) {
+          setFileContent(action.content);
+        }
+        // Refresh sidebar tree in case new files were created
+        setRefreshTree((n) => n + 1);
+      } catch (err) {
+        console.error("Failed to apply AI file action:", err);
+      }
+    },
+    [userHash, projectId, encryptionKey, syncToContainer]
+  );
+
+  // ── AI Agent: read file content for diff ──
+  const handleReadFileContent = useCallback(
+    async (path: string): Promise<string> => {
+      if (!userHash) return "";
+      try {
+        return await readFile(userHash, projectId, path, encryptionKey ?? undefined);
+      } catch {
+        return "";
+      }
+    },
+    [userHash, projectId, encryptionKey]
+  );
+
   // ── Explicit save (Ctrl+S / Save button) ──
   const saveFile = useCallback(
     async () => {
@@ -918,6 +962,20 @@ const EditorProjectPage: FC = () => {
             Preview
           </button>
 
+          {/* AI Chat toggle */}
+          <button
+            onClick={() => setShowAIChat((v) => !v)}
+            className={`hidden items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors sm:flex ${
+              showAIChat
+                ? "border-indigo bg-indigo/10 text-indigo-light"
+                : "border-border-light text-muted hover:text-foreground"
+            }`}
+            title={showAIChat ? "Hide AI chat" : "Show AI chat"}
+          >
+            <Bot className="h-3 w-3" />
+            AI
+          </button>
+
           {(isStartingServer || serverProcessId) && (
             <span className="hidden text-[10px] text-muted lg:block">
               {isStartingServer ? "Starting server…" : `PID ${serverProcessId}`}
@@ -1143,6 +1201,21 @@ const EditorProjectPage: FC = () => {
             </div>
           )}
         </div>
+
+        {/* ── AI Chat Sidebar ── */}
+        {showAIChat && (
+          <ChatSidebar
+            isOpen={showAIChat}
+            onToggle={() => setShowAIChat((v) => !v)}
+            activePath={activePath}
+            activeContent={fileContent}
+            userHash={userHash ?? ""}
+            projectId={projectId}
+            encryptionKey={encryptionKey ?? undefined}
+            onApplyFileAction={handleApplyFileAction}
+            readFileContent={handleReadFileContent}
+          />
+        )}
       </div>
     </div>
   );
