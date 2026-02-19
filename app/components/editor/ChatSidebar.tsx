@@ -19,15 +19,18 @@ import {
     type ChatMessage,
 } from "@/lib/ai-engine";
 import { parseAIResponse, type FileAction } from "@/lib/ai-parser";
+import { usePendingPaths, type PendingReview } from "@/lib/pending-change-context";
 import {
     Bot,
+    CheckCheck,
     ChevronRight,
     Cpu,
-    Download,
+    FileClock,
     Loader2,
     Send,
     Square,
     User,
+    X,
     Zap
 } from "lucide-react";
 import {
@@ -37,7 +40,7 @@ import {
     useState,
     type FC,
 } from "react";
-import DiffView from "./DiffView";
+import MarkdownRenderer from "./MarkdownRenderer";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -74,6 +77,122 @@ interface ChatSidebarProps {
   readFileContent: (path: string) => Promise<string>;
 }
 
+// ─── Helpers ────────────────────────────────────────────────
+
+/**
+ * Derive a short human-readable model name from the raw WebLLM modelId.
+ * Falls back to stripping the quantisation suffix (e.g. "-q4f16_1-MLC").
+ */
+function modelDisplayName(modelId: string | null): string {
+  if (!modelId) return "Local Model";
+  if (modelId.includes("Qwen3-Coder-Next"))   return "Qwen3-Coder-Next (Local)";
+  if (modelId.includes("Qwen2.5-Coder-1.5B")) return "Qwen2.5-Coder-1.5B (Local)";
+  if (modelId.includes("Qwen2.5-0.5B"))       return "Qwen2.5-0.5B (Local)";
+  if (modelId.includes("Qwen2.5-Coder"))      return "Qwen2.5-Coder (Local)";
+  if (modelId.includes("Qwen3"))              return "Qwen3-Coder (Local)";
+  // Generic fallback: strip quantisation tag
+  return (modelId.split("-q4")[0] ?? modelId) + " (Local)";
+}
+
+// ─── ReviewOverlay ──────────────────────────────────────────────────────────
+// Absolutely-positioned panel that floats over the chat at the bottom.
+// Uses position:absolute + bottom:0 so it is ALWAYS visible regardless of
+// the flex-col / overflow-y-auto layout of the sidebar.  The sidebar
+// container must have position:relative (set below) for this to work.
+// pointer-events:auto guarantees buttons are clickable even while streaming.
+function ReviewOverlay({
+  onApplyFileAction,
+  setMessages,
+}: {
+  onApplyFileAction: (action: import("@/lib/ai-parser").FileAction) => void;
+  setMessages: React.Dispatch<React.SetStateAction<UIMessage[]>>;
+}) {
+  const { pendingReview, setPendingReview, clearPendingPaths } = usePendingPaths();
+
+  if (!pendingReview) return null;
+
+  const dismiss = (accepted: boolean) => {
+    if (accepted) {
+      pendingReview.actions.forEach((a) => onApplyFileAction(a));
+    }
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === pendingReview.messageId
+          ? {
+              ...m,
+              actionStatus: Object.fromEntries(
+                pendingReview.actions.map((a) => [
+                  a.path,
+                  accepted ? ("accepted" as const) : ("rejected" as const),
+                ])
+              ),
+            }
+          : m
+      )
+    );
+    setPendingReview(null);
+    clearPendingPaths();
+  };
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 0,
+        left: 0,
+        right: 0,
+        zIndex: 100,
+        pointerEvents: "auto",
+      }}
+      className="border-t-2 border-amber-500/50 bg-[#0e0b00]/95 px-3 pb-3 pt-2.5 backdrop-blur-sm shadow-[0_-12px_32px_rgba(0,0,0,0.7)]"
+    >
+      {/* Title + file count */}
+      <div className="mb-2 flex items-center gap-1.5">
+        <FileClock className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+        <span className="text-[11px] font-semibold tracking-wide text-amber-300">
+          Review AI Changes
+        </span>
+        <span className="ml-auto shrink-0 rounded-full bg-amber-500/20 px-2 py-0.5 text-[9px] font-medium text-amber-400">
+          {pendingReview.actions.length}&nbsp;file
+          {pendingReview.actions.length !== 1 ? "s" : ""}
+        </span>
+      </div>
+
+      {/* File list */}
+      <div className="mb-3 space-y-0.5">
+        {pendingReview.actions.map(({ path }) => (
+          <div key={path} className="flex items-center gap-1.5">
+            <span className="h-1 w-1 shrink-0 rounded-full bg-amber-400/70" />
+            <span className="font-mono text-[10px] text-foreground/60 truncate">
+              {path}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Buttons */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => dismiss(true)}
+          style={{ pointerEvents: "auto" }}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-3 py-2 text-[12px] font-bold text-white shadow-md transition-colors hover:bg-emerald-500 active:scale-[0.98]"
+        >
+          <CheckCheck className="h-3.5 w-3.5" />
+          Accept Changes
+        </button>
+        <button
+          onClick={() => dismiss(false)}
+          style={{ pointerEvents: "auto" }}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-red-500/50 bg-red-600/15 px-3 py-2 text-[12px] font-semibold text-red-400 transition-colors hover:bg-red-600/25 active:scale-[0.98]"
+        >
+          <X className="h-3.5 w-3.5" />
+          Reject
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Component ──────────────────────────────────────────────
 
 const ChatSidebar: FC<ChatSidebarProps> = ({
@@ -90,8 +209,29 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
   const ai = useAIEngine();
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState("");
+  const [queuedPrompt, setQueuedPrompt] = useState<string | null>(null);
+
+  // ── Review gate — stored in context so it persists when sidebar is hidden ──
+  const {
+    pendingReview,
+    setPendingReview,
+    registerPendingPaths,
+    clearPendingPaths,
+  } = usePendingPaths();
+
+  // ── Streaming detection ──────────────────────────────────────────────────
+  // accumulatedCode builds the full raw AI output token-by-token.
+  // isApplyingChanges / pendingFilePath are set the moment FILE: is detected
+  // mid-stream so the "Reviewing…" badge appears immediately, before onDone.
+  const accumulatedCode = useRef("");
+  const detectedRef = useRef(false); // avoids setState on every token
+  const [isApplyingChanges, setIsApplyingChanges] = useState(false);
+  const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Keep a stable ref to messages so queued-prompt fires never use a stale snapshot
+  const messagesRef = useRef(messages);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
   // hold per-action original content for the diff viewer
   const [fileSnapshots, setFileSnapshots] = useState<Record<string, string>>({});
 
@@ -110,12 +250,27 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
   }, [isOpen]);
 
   // ── Handle sending a message ──
-  const handleSend = useCallback(async () => {
-    const prompt = input.trim();
+  const handleSend = useCallback(async (promptOverride?: string) => {
+    const prompt = (promptOverride ?? input).trim();
     if (!prompt || ai.status === "generating") return;
-    if (ai.status !== "ready") return;
 
-    setInput("");
+    // Model not ready yet — queue the prompt; it fires automatically on ready
+    if (ai.status !== "ready") {
+      if (!promptOverride) {
+        setQueuedPrompt(prompt);
+        setInput("");
+      }
+      return;
+    }
+
+    if (!promptOverride) setInput("");
+    setQueuedPrompt(null);
+
+    // Reset streaming-detection state for this new request
+    accumulatedCode.current = "";
+    detectedRef.current = false;
+    setIsApplyingChanges(false);
+    setPendingFilePath(null);
 
     // Add user message
     const userMsg: UIMessage = {
@@ -153,7 +308,7 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
     // Build message history for the LLM
     const chatMessages: ChatMessage[] = [
       { role: "system", content: systemPrompt },
-      ...messages.map((m) => ({
+      ...messagesRef.current.map((m) => ({
         role: m.role as "user" | "assistant",
         content: m.content,
       })),
@@ -165,6 +320,19 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
       chatMessages,
       // onToken
       (token) => {
+        accumulatedCode.current += token;
+
+        // Detect FILE: <path> as soon as it appears in the stream
+        // so the "Reviewing…" badge shows up while the AI is still writing.
+        if (!detectedRef.current) {
+          const m = /FILE:\s*([^\n]+)/.exec(accumulatedCode.current);
+          if (m) {
+            detectedRef.current = true;
+            setIsApplyingChanges(true);
+            setPendingFilePath(m[1].trim());
+          }
+        }
+
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
@@ -202,6 +370,19 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
               : m
           )
         );
+
+        // Gate: if the AI proposed file changes, push to context for review.
+        // Nothing is written until the user clicks "Accept Changes".
+        if (parsed.actions.length > 0) {
+          const review: PendingReview = { messageId: assistantId, actions: parsed.actions };
+          setPendingReview(review);
+          registerPendingPaths(parsed.actions.map((a) => a.path));
+        }
+
+        // Clear local streaming detection — context state takes over
+        setIsApplyingChanges(false);
+        setPendingFilePath(null);
+        detectedRef.current = false;
       },
       // onError
       (error) => {
@@ -221,7 +402,6 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
   }, [
     input,
     ai,
-    messages,
     userHash,
     projectId,
     activePath,
@@ -230,43 +410,13 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
     readFileContent,
   ]);
 
-  // ── Accept a file action ──
-  const handleAccept = useCallback(
-    (msgId: string, action: FileAction) => {
-      onApplyFileAction(action);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === msgId
-            ? {
-                ...m,
-                actionStatus: {
-                  ...m.actionStatus,
-                  [action.path]: "accepted",
-                },
-              }
-            : m
-        )
-      );
-    },
-    [onApplyFileAction]
-  );
-
-  // ── Reject a file action ──
-  const handleReject = useCallback((msgId: string, action: FileAction) => {
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.id === msgId
-          ? {
-              ...m,
-              actionStatus: {
-                ...m.actionStatus,
-                [action.path]: "rejected",
-              },
-            }
-          : m
-      )
-    );
-  }, []);
+  // ── Fire queued prompt as soon as model becomes ready ──
+  useEffect(() => {
+    if (ai.status === "ready" && queuedPrompt !== null) {
+      handleSend(queuedPrompt);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ai.status]);
 
   // ── Keyboard shortcuts ──
   const handleKeyDown = useCallback(
@@ -279,7 +429,7 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
     [handleSend]
   );
 
-  // ── Render explanation text (strip FILE blocks for display) ──
+  // ── Render explanation text (strip FILE blocks for display in MarkdownRenderer) ──
   const renderContent = useCallback((msg: UIMessage) => {
     if (msg.streaming) return msg.content;
     if (!msg.actions || msg.actions.length === 0) return msg.content;
@@ -287,21 +437,24 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
     return parseAIResponse(msg.content).explanation;
   }, []);
 
-  // ── Toggle button (always visible) ──
-  if (!isOpen) {
-    return (
+  // ── Always render both the toggle button and the panel; use CSS to show/hide ──
+  return (
+    <>
+      {/* Floating toggle button — shown when sidebar is closed */}
       <button
         onClick={onToggle}
-        className="fixed right-3 top-1/2 z-40 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface shadow-lg transition-colors hover:bg-surface-light"
+        style={{ display: isOpen ? "none" : "flex" }}
+        className="fixed right-3 top-1/2 z-40 -translate-y-1/2 h-10 w-10 items-center justify-center rounded-full border border-border bg-surface shadow-lg transition-colors hover:bg-surface-light"
         title="Open AI Chat"
       >
         <Bot className="h-4 w-4 text-indigo" />
       </button>
-    );
-  }
 
-  return (
-    <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-border bg-surface">
+      {/* Full sidebar panel — position:relative so ReviewOverlay can use absolute bottom:0 */}
+      <div
+        style={{ display: isOpen ? "flex" : "none" }}
+        className="relative h-full w-[340px] shrink-0 flex-col border-l border-border bg-surface"
+      >
       {/* ─── Header ─── */}
       <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
         <div className="flex items-center gap-2">
@@ -309,10 +462,12 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
           <span className="text-xs font-semibold text-foreground">
             AI Agent
           </span>
-          {ai.modelId && (
-            <span className="rounded bg-indigo/10 px-1.5 py-0.5 text-[9px] text-indigo">
-              {ai.modelId.split("-").slice(0, 3).join("-")}
-            </span>
+          {/* Status dot — minimal indicator */}
+          {ai.status === "ready" && (
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" title={modelDisplayName(ai.modelId)} />
+          )}
+          {(ai.status === "idle" || ai.status === "loading") && (
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" title="Initializing…" />
           )}
         </div>
         <div className="flex items-center gap-1">
@@ -346,88 +501,41 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
         </div>
       </div>
 
-      {/* ─── Model Loading ─── */}
-      {ai.status === "idle" && (
-        <div className="flex flex-col items-center gap-3 p-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo/10">
-            <Bot className="h-6 w-6 text-indigo" />
-          </div>
-          <p className="text-center text-[11px] text-muted">
-            Load a local AI model to get started. The model runs entirely
-            in your browser — nothing leaves this device.
-          </p>
-          <button
-            onClick={() => ai.loadModel()}
-            className="flex items-center gap-2 rounded-lg bg-indigo px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-indigo-dark"
-          >
-            <Download className="h-3.5 w-3.5" />
-            Load Model
-          </button>
-          <p className="text-center text-[9px] text-muted/60">
-            {ai.hasGPU
-              ? "WebGPU detected — Qwen2.5-Coder-1.5B (~1 GB)"
-              : ai.hasGPU === false
-                ? "No WebGPU — Qwen2.5-0.5B CPU fallback (~400 MB)"
-                : "Detecting GPU…"}
-          </p>
-        </div>
-      )}
+      {/* ─── Body: messages + init bar + error ─── */}
 
-      {ai.status === "loading" && (
-        <div className="flex flex-col items-center gap-3 p-4">
-          <Loader2 className="h-6 w-6 animate-spin text-indigo" />
-          <p className="text-center text-[11px] text-muted">{ai.loadText}</p>
-          {/* Progress bar */}
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-border">
-            <div
-              className="h-full rounded-full bg-indigo transition-all duration-300"
-              style={{ width: `${Math.round(ai.loadProgress * 100)}%` }}
-            />
-          </div>
-          <p className="text-[10px] text-muted/60">
-            {Math.round(ai.loadProgress * 100)}% —{" "}
-            {ai.loadProgress < 1
-              ? "First load downloads to IndexedDB"
-              : "Almost ready…"}
-          </p>
-        </div>
-      )}
-
+      {/* Error bar (no model loaded + failed) */}
       {ai.status === "error" && !ai.modelId && (
-        <div className="flex flex-col items-center gap-3 p-4">
-          <p className="text-center text-[11px] text-red-400">
-            {ai.error}
-          </p>
+        <div className="flex items-center justify-between gap-2 border-b border-red-500/20 bg-red-500/5 px-3 py-2">
+          <p className="truncate text-[11px] text-red-400">{ai.error ?? "Load failed"}</p>
           <button
             onClick={() => ai.loadModel()}
-            className="flex items-center gap-2 rounded-lg bg-indigo px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-indigo-dark"
+            className="shrink-0 rounded px-2 py-1 text-[10px] font-medium text-red-400 ring-1 ring-red-500/30 transition-colors hover:bg-red-500/10"
           >
-            <Download className="h-3.5 w-3.5" />
             Retry
           </button>
         </div>
       )}
 
-      {/* ─── Message History ─── */}
-      {(ai.status === "ready" || ai.status === "generating" || (ai.status === "error" && ai.modelId)) && (
-        <>
-          <div
-            ref={scrollRef}
-            className="flex-1 overflow-y-auto p-3 space-y-3"
-          >
-            {messages.length === 0 && (
-              <div className="flex flex-col items-center justify-center h-full gap-2 text-center">
-                <Bot className="h-8 w-8 text-muted/20" />
-                <p className="text-[11px] text-muted/60">
-                  Ask me to create, edit, or explain code.
-                  {activePath
-                    ? ` I can see your open file: ${activePath}`
-                    : " Open a file to give me context."}
-                </p>
-              </div>
-            )}
+      {/* Message history — visible at all statuses */}
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto p-3 space-y-3"
+      >
+        {messages.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full gap-2 text-center">
+            <Bot className="h-8 w-8 text-muted/20" />
+            <p className="text-[11px] text-muted/60">
+              {(ai.status === "idle" || ai.status === "loading")
+                ? "System initializing — you can type your prompt now."
+                : "Ask me to create, edit, or explain code."}
+              {ai.status === "ready" && activePath
+                ? ` I can see your open file: ${activePath}`
+                : ""}
+            </p>
+          </div>
+        )}
 
-            {messages.map((msg) => (
+        {messages.map((msg) => (
               <div key={msg.id} className="group">
                 {/* Message bubble */}
                 <div
@@ -447,12 +555,21 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
                         : "bg-white/5 text-foreground"
                     }`}
                   >
-                    <pre className="whitespace-pre-wrap break-words font-sans">
-                      {renderContent(msg)}
-                      {msg.streaming && (
-                        <span className="inline-block h-3 w-1.5 animate-pulse bg-indigo ml-0.5" />
-                      )}
-                    </pre>
+                    {msg.role === "assistant" ? (
+                      <>
+                        <MarkdownRenderer
+                          content={renderContent(msg)}
+                          streaming={msg.streaming}
+                        />
+                        {msg.streaming && (
+                          <span className="inline-block h-3 w-1.5 animate-pulse bg-indigo ml-0.5" />
+                        )}
+                      </>
+                    ) : (
+                      <pre className="whitespace-pre-wrap break-words font-sans">
+                        {renderContent(msg)}
+                      </pre>
+                    )}
                   </div>
                   {msg.role === "user" && (
                     <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/10 mt-0.5">
@@ -461,18 +578,27 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
                   )}
                 </div>
 
-                {/* File actions — DiffView */}
+                {/* File actions — status labels + Reviewing badge */}
                 {msg.actions &&
                   !msg.streaming &&
                   msg.actions.map((action) => {
                     const status = msg.actionStatus?.[action.path];
+                    const isReviewing =
+                      (pendingReview?.messageId === msg.id &&
+                        pendingReview.actions.some((a) => a.path === action.path)) ||
+                      (isApplyingChanges &&
+                        pendingFilePath === action.path &&
+                        !msg.actionStatus?.[action.path]);
+
                     if (status === "accepted") {
                       return (
                         <div
                           key={action.path}
-                          className="ml-7 mt-1 flex items-center gap-1 text-[10px] text-emerald-400"
+                          className="ml-7 mt-1 flex items-center gap-1.5 text-[10px] text-emerald-400"
                         >
-                          ✓ Applied: {action.path}
+                          <CheckCheck className="h-3 w-3 shrink-0" />
+                          <span className="font-mono truncate">{action.path}</span>
+                          <span className="shrink-0 text-emerald-400/70">· committed</span>
                         </div>
                       );
                     }
@@ -480,72 +606,141 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
                       return (
                         <div
                           key={action.path}
-                          className="ml-7 mt-1 flex items-center gap-1 text-[10px] text-red-400"
+                          className="ml-7 mt-1 flex items-center gap-1.5 text-[10px] text-red-400/70"
                         >
-                          ✗ Rejected: {action.path}
+                          <X className="h-3 w-3 shrink-0" />
+                          <span className="font-mono truncate line-through">{action.path}</span>
+                          <span className="shrink-0">· discarded</span>
                         </div>
                       );
                     }
+                    if (isReviewing) {
+                      return (
+                        <div
+                          key={action.path}
+                          className="ml-7 mt-1 flex items-center gap-1.5 rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1"
+                        >
+                          <FileClock className="h-3 w-3 shrink-0 text-amber-400" />
+                          <span className="font-mono text-[10px] text-foreground/80 truncate">
+                            {action.path}
+                          </span>
+                          <span className="ml-auto shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-300">
+                            Reviewing…
+                          </span>
+                        </div>
+                      );
+                    }
+                    // Fallback — shouldn't normally be reached once pendingChange is set
                     return (
-                      <div key={action.path} className="ml-7">
-                        <DiffView
-                          action={action}
-                          currentContent={fileSnapshots[action.path] ?? ""}
-                          onAccept={(a) => handleAccept(msg.id, a)}
-                          onReject={(a) => handleReject(msg.id, a)}
-                        />
+                      <div
+                        key={action.path}
+                        className="ml-7 mt-1 flex items-center gap-1.5 text-[10px] text-muted/50"
+                      >
+                        <span className="font-mono truncate">{action.path}</span>
                       </div>
                     );
                   })}
               </div>
-            ))}
-          </div>
+        ))}
+      </div>
 
-          {/* ─── Input Area ─── */}
-          <div className="border-t border-border/50 p-3">
-            {ai.status === "generating" && (
-              <button
-                onClick={ai.abort}
-                className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground hover:border-border-light"
-              >
-                <Square className="h-3 w-3" />
-                Stop generating
-              </button>
-            )}
-            <div className="flex items-end gap-2">
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={
-                  ai.status === "generating"
-                    ? "Generating…"
-                    : "Ask the AI agent…"
-                }
-                disabled={ai.status === "generating"}
-                rows={1}
-                className="flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-[12px] text-foreground placeholder-muted/50 outline-none transition-colors focus:border-indigo disabled:opacity-50"
-                style={{ maxHeight: "80px" }}
-              />
-              <button
-                onClick={handleSend}
-                disabled={
-                  !input.trim() || ai.status === "generating"
-                }
-                className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-lg bg-indigo text-white transition-colors hover:bg-indigo-dark disabled:opacity-30"
-                title="Send message"
-              >
-                <Send className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            <p className="mt-1.5 text-[9px] text-muted/40 text-center">
-              100% local · your code never leaves this device
-            </p>
+      {/* ─── ReviewOverlay — absolute bottom:0, position:relative on parent ─── */}
+      <ReviewOverlay
+        onApplyFileAction={onApplyFileAction}
+        setMessages={setMessages}
+      />
+
+      {/* ─── System Initializing bar ─── */}
+      {(ai.status === "idle" || ai.status === "loading") && (
+        <div className="border-t border-border/30 bg-surface px-3 py-2">
+          <div className="mb-1.5 flex items-center gap-2">
+            <Loader2 className="h-3 w-3 animate-spin text-indigo/70" />
+            <span className="text-[10px] text-muted/70 truncate">
+              {ai.loadText || "System initializing…"}
+            </span>
+            <span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted/50">
+              {Math.round(ai.loadProgress * 100)}%
+            </span>
           </div>
-        </>
+          {/* Thin progress bar */}
+          <div className="h-0.5 w-full overflow-hidden rounded-full bg-border">
+            <div
+              className="h-full rounded-full bg-indigo/60 transition-all duration-300"
+              style={{ width: `${Math.round(ai.loadProgress * 100)}%` }}
+            />
+          </div>
+        </div>
       )}
-    </div>
+
+      {/* ─── Input Area ─── */}
+      <div className="border-t border-border/50 p-3">
+        {ai.status === "generating" && (
+          <button
+            onClick={ai.abort}
+            className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground hover:border-border-light"
+          >
+            <Square className="h-3 w-3" />
+            Stop generating
+          </button>
+        )}
+        {/* Queued prompt indicator */}
+        {queuedPrompt && (
+          <div className="mb-2 flex items-center gap-1.5 rounded-lg border border-indigo/20 bg-indigo/5 px-2.5 py-1.5">
+            <Loader2 className="h-3 w-3 shrink-0 animate-spin text-indigo/60" />
+            <span className="truncate text-[10px] text-muted/70">
+              Queued: “{queuedPrompt}”
+            </span>
+            <button
+              onClick={() => setQueuedPrompt(null)}
+              className="ml-auto shrink-0 text-[10px] text-muted/40 hover:text-muted"
+              title="Cancel queued prompt"
+            >
+              ×
+            </button>
+          </div>
+        )}
+        <div className="flex items-end gap-2">
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              pendingReview
+                ? "Review the proposed changes above before continuing…"
+                : ai.status === "generating"
+                  ? "Generating…"
+                  : ai.status === "loading" || ai.status === "idle"
+                    ? "Type your prompt — will send once ready…"
+                    : "Ask the AI agent…"
+            }
+            disabled={ai.status === "generating" || !!pendingReview}
+            rows={1}
+            className="flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-[12px] text-foreground placeholder-muted/50 outline-none transition-colors focus:border-indigo disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ maxHeight: "80px" }}
+          />
+          <button
+            onClick={() => handleSend()}
+            disabled={
+              !input.trim() || ai.status === "generating" || !!pendingReview
+            }
+            className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-lg bg-indigo text-white transition-colors hover:bg-indigo-dark disabled:opacity-30"
+            title="Send message"
+          >
+            <Send className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <p className="mt-1.5 text-[9px] text-muted/40 text-center">
+          100% local · your code never leaves this device
+        </p>
+        {ai.modelId && (
+          <p className="mt-0.5 text-[9px] text-muted/30 text-center truncate" title={ai.modelId}>
+            {modelDisplayName(ai.modelId)}
+          </p>
+        )}
+      </div>
+      </div>
+    </>
   );
 };
 

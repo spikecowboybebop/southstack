@@ -7,10 +7,12 @@ import {
     createFile as opfsCreateFile,
     type FSNode,
 } from "@/lib/opfs";
+import { usePendingPaths } from "@/lib/pending-change-context";
 import {
     ChevronDown,
     ChevronRight,
     File,
+    FileClock,
     FilePlus,
     Folder,
     FolderOpen,
@@ -88,6 +90,7 @@ export default function Sidebar({
   const [tree, setTree] = useState<FSNode[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const { pendingPaths } = usePendingPaths();
 
   // "Inline rename / new" state
   const [showNewEntry, setShowNewEntry] = useState(false);
@@ -261,20 +264,32 @@ export default function Sidebar({
     }
 
     // File node
+    const isPending = pendingPaths.has(node.path);
     return (
       <div
         key={node.path}
         className={`group flex items-center gap-1.5 cursor-pointer py-[3px] pr-2 text-[13px] transition-colors ${
           isActive
             ? "bg-indigo/10 text-foreground"
-            : "text-muted hover:bg-white/5 hover:text-foreground/80"
+            : isPending
+              ? "bg-amber-500/5 text-amber-300/90 hover:bg-amber-500/10"
+              : "text-muted hover:bg-white/5 hover:text-foreground/80"
         }`}
         style={{ paddingLeft: indent + 8 }}
         onClick={() => onFileSelect(node.path)}
       >
         <span className="w-3.5" /> {/* spacer for chevron alignment */}
-        <File className={`h-3.5 w-3.5 shrink-0 ${fileIcon(node.name)}`} />
+        {isPending ? (
+          <FileClock className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+        ) : (
+          <File className={`h-3.5 w-3.5 shrink-0 ${fileIcon(node.name)}`} />
+        )}
         <span className="truncate">{node.name}</span>
+        {isPending && (
+          <span className="ml-1 shrink-0 rounded bg-amber-500/20 px-1 py-0.5 text-[8px] font-medium text-amber-400">
+            pending
+          </span>
+        )}
 
         <div className="ml-auto hidden items-center gap-0.5 group-hover:flex">
           <button

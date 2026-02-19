@@ -34,7 +34,9 @@ import { useAuth } from "../../components/AuthProvider";
 import Sidebar from "../../components/editor/Sidebar";
 import TabBar, { type TabItem } from "../../components/editor/TabBar";
 
+import { AIProvider } from "@/lib/ai-engine";
 import type { FileAction } from "@/lib/ai-parser";
+import { PendingChangeProvider } from "@/lib/pending-change-context";
 import type { Monaco } from "@monaco-editor/react";
 import type { WebContainerProcess } from "@webcontainer/api";
 import {
@@ -843,6 +845,8 @@ const EditorProjectPage: FC = () => {
 
   // ── Main layout ──
   return (
+    <AIProvider>
+    <PendingChangeProvider>
     <div className="flex h-screen flex-col overflow-hidden bg-background">
       {/* ─── Top bar ─── */}
       <header className="flex items-center justify-between border-b border-border bg-surface px-4 py-2 sm:px-5">
@@ -1202,22 +1206,22 @@ const EditorProjectPage: FC = () => {
           )}
         </div>
 
-        {/* ── AI Chat Sidebar ── */}
-        {showAIChat && (
-          <ChatSidebar
-            isOpen={showAIChat}
-            onToggle={() => setShowAIChat((v) => !v)}
-            activePath={activePath}
-            activeContent={fileContent}
-            userHash={userHash ?? ""}
-            projectId={projectId}
-            encryptionKey={encryptionKey ?? undefined}
-            onApplyFileAction={handleApplyFileAction}
-            readFileContent={handleReadFileContent}
-          />
-        )}
+        {/* ── AI Chat Sidebar — always mounted so the worker/state survive hide ── */}
+        <ChatSidebar
+          isOpen={showAIChat}
+          onToggle={() => setShowAIChat((v) => !v)}
+          activePath={activePath}
+          activeContent={fileContent}
+          userHash={userHash ?? ""}
+          projectId={projectId}
+          encryptionKey={encryptionKey ?? undefined}
+          onApplyFileAction={handleApplyFileAction}
+          readFileContent={handleReadFileContent}
+        />
       </div>
     </div>
+    </PendingChangeProvider>
+    </AIProvider>
   );
 };
 
