@@ -301,8 +301,17 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
       );
       systemPrompt = ctx.systemContext;
     } catch {
-      systemPrompt =
-        "You are a coding assistant in an IDE called SouthStack. Help the user with their code.";
+      systemPrompt = [
+        "You are SouthStack Agent, a coding assistant in a local browser IDE.",
+        "",
+        "MANDATORY: When writing code that belongs in a file, always use this format:",
+        "FILE: path/to/file.ext",
+        "```language",
+        "<complete file contents>",
+        "```",
+        "",
+        "Never use a bare code block for file content. Always use a FILE block.",
+      ].join("\n");
     }
 
     // Build message history for the LLM
@@ -343,7 +352,7 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
       },
       // onDone
       async (fullText) => {
-        const parsed = parseAIResponse(fullText);
+        const parsed = parseAIResponse(fullText, activePath);
 
         // Pre-read the file snapshots so DiffView can show proper diffs
         const snapshots: Record<string, string> = {};
@@ -429,12 +438,12 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
     [handleSend]
   );
 
-  // ── Render explanation text (strip FILE blocks for display in MarkdownRenderer) ──
+  // ── Render message text ──────────────────────────────────────────────────
+  // Always show the full AI response (including FILE blocks which render as
+  // syntax-highlighted code via MarkdownRenderer). The per-file status badges
+  // (accepted / rejected / reviewing) are rendered separately below the bubble.
   const renderContent = useCallback((msg: UIMessage) => {
-    if (msg.streaming) return msg.content;
-    if (!msg.actions || msg.actions.length === 0) return msg.content;
-    // Show only the explanation part (FILE blocks rendered as DiffView)
-    return parseAIResponse(msg.content).explanation;
+    return msg.content;
   }, []);
 
   // ── Always render both the toggle button and the panel; use CSS to show/hide ──

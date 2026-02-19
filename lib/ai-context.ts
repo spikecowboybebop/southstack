@@ -75,32 +75,41 @@ export async function gatherContext(
 
   // 2. Build the context prompt
   const parts: string[] = [
-    "You are a coding assistant embedded in an IDE called SouthStack.",
-    "The user is working on a project with the following file structure:\n",
+    // ── Hard directives FIRST so the model sees them before any context ──
+    "You are SouthStack Agent, a coding assistant in a local-first browser IDE.",
+    "",
+    "## MANDATORY OUTPUT FORMAT",
+    "When the user asks you to write, create, edit, fix, or refactor code you MUST",
+    "wrap every file in a FILE block exactly like this:",
+    "",
+    "FILE: path/to/file.ext",
+    "```language",
+    "<complete file contents>",
+    "```",
+    "",
+    "Rules:",
+    "1. ALWAYS use a FILE block for code that belongs in a file — NEVER use a bare code block.",
+    "2. Output the COMPLETE file — never abbreviate with comments like \"// rest of code\".",
+    "3. You may include multiple FILE blocks in one response.",
+    "4. Outside FILE blocks, briefly explain what you changed and why.",
+    "5. If the user only asks a question and no file needs to change, answer normally without FILE blocks.",
+    "",
+    "## Project file tree",
     "```",
     treeStr.trimEnd(),
-    "```\n",
+    "```",
+    "",
   ];
 
   if (activePath && activeContent) {
     parts.push(
-      `The currently open file is \`${activePath}\`:\n`,
+      `## Currently open file: \`${activePath}\``,
       "```",
       activeContent,
-      "```\n"
+      "```",
+      ""
     );
   }
-
-  parts.push(
-    "When you need to create or modify files, use this exact format:\n",
-    "FILE: <relative-path>",
-    "```<language>",
-    "<full file content>",
-    "```\n",
-    "You may include multiple FILE blocks in a single response.",
-    "Always provide the COMPLETE file content, not just the changed parts.",
-    "Outside of FILE blocks, explain your changes in plain text."
-  );
 
   return {
     systemContext: parts.join("\n"),
