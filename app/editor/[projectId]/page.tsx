@@ -8,25 +8,25 @@
  */
 
 import {
-    detectLanguage,
-    listTree,
-    readFile,
-    writeFile,
+  detectLanguage,
+  listTree,
+  readFile,
+  writeFile,
 } from "@/lib/opfs";
 import { OPFSWriteQueue } from "@/lib/opfs-write-queue";
 import { getProject, type Project } from "@/lib/projects";
 import {
-    initializeProject,
-    readPackageScripts,
-    rehydrateProject,
-    spawnNpmScript,
-    switchProject,
-    syncDeleteInContainer,
-    syncDirToContainer,
-    syncFileToContainer,
-    teardownProject,
-    useWebContainer,
-    type RehydrationPhase
+  initializeProject,
+  readPackageScripts,
+  rehydrateProject,
+  spawnNpmScript,
+  switchProject,
+  syncDeleteInContainer,
+  syncDirToContainer,
+  syncFileToContainer,
+  teardownProject,
+  useWebContainer,
+  type RehydrationPhase
 } from "@/lib/useWebContainer";
 import { injectHeaderConfig } from "@/lib/wc-server-headers";
 import { WCSyncManager } from "@/lib/wc-sync-manager";
@@ -40,30 +40,30 @@ import { PendingChangeProvider } from "@/lib/pending-change-context";
 import type { Monaco } from "@monaco-editor/react";
 import type { WebContainerProcess } from "@webcontainer/api";
 import {
-    ArrowLeft,
-    Bot,
-    Code2,
-    FileCode,
-    Loader2,
-    LogOut,
-    PanelRightClose,
-    PanelRightOpen,
-    Play,
-    Save,
-    Square,
-    Terminal,
-    WifiOff,
+  ArrowLeft,
+  Bot,
+  Code2,
+  FileCode,
+  Loader2,
+  LogOut,
+  PanelRightClose,
+  PanelRightOpen,
+  Play,
+  Save,
+  Square,
+  Terminal,
+  WifiOff,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
-    useCallback,
-    useEffect,
-    useMemo,
-    useRef,
-    useState,
-    type FC,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FC,
 } from "react";
 import type { WebTerminalHandle } from "../../components/editor/WebTerminal";
 
@@ -409,7 +409,7 @@ const EditorProjectPage: FC = () => {
           if (tree.length === 0 && p.content) {
             const ext =
               { typescript: "ts", javascript: "js", python: "py", html: "html", css: "css" }[
-                p.language
+              p.language
               ] ?? "txt";
             const mainFile = `main.${ext}`;
             await writeFile(userHash, projectId, mainFile, p.content, encryptionKey ?? undefined);
@@ -846,381 +846,389 @@ const EditorProjectPage: FC = () => {
   // ── Main layout ──
   return (
     <AIProvider>
-    <PendingChangeProvider>
-    <div className="flex h-screen flex-col overflow-hidden bg-background">
-      {/* ─── Top bar ─── */}
-      <header className="flex items-center justify-between border-b border-border bg-surface px-4 py-2 sm:px-5">
-        <div className="flex items-center gap-3">
-          <a
-            href="/dashboard"
-            onClick={(e) => {
-              e.preventDefault();
-              flushAndNavigate("/dashboard");
-            }}
-            className="flex items-center gap-1.5 text-sm text-muted transition-colors hover:text-foreground"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Dashboard</span>
-          </a>
+      <PendingChangeProvider>
+        <div className="flex h-screen flex-col overflow-hidden bg-background">
+          {/* ─── Top bar ─── */}
+          <header className="flex items-center justify-between border-b border-border bg-surface px-4 py-2 sm:px-5">
+            <div className="flex items-center gap-3">
+              <a
+                href="/dashboard"
+                onClick={(e) => {
+                  e.preventDefault();
+                  flushAndNavigate("/dashboard");
+                }}
+                className="flex items-center gap-1.5 text-sm text-muted transition-colors hover:text-foreground"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Dashboard</span>
+              </a>
 
-          <div className="h-4 w-px bg-border" />
+              <div className="h-4 w-px bg-border" />
 
-          <Link href="/" className="flex items-center gap-1.5">
-            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-indigo text-white">
-              <Terminal className="h-3 w-3" />
+              <Link href="/" className="flex items-center gap-1.5">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-indigo text-white">
+                  <Terminal className="h-3 w-3" />
+                </div>
+              </Link>
+
+              <div className="h-4 w-px bg-border" />
+
+              <span className="text-sm font-medium text-foreground line-clamp-1 max-w-[200px]">
+                {project.name}
+              </span>
+              <span className="rounded-md bg-indigo/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-indigo">
+                {project.language}
+              </span>
             </div>
-          </Link>
 
-          <div className="h-4 w-px bg-border" />
+            <div className="flex items-center gap-3">
+              {/* Save indicator */}
+              <span className="flex items-center gap-1.5 text-[11px] text-muted">
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Saving…
+                  </>
+                ) : lastSaved ? (
+                  <>
+                    <Save className="h-3 w-3" />
+                    Saved
+                  </>
+                ) : null}
+              </span>
 
-          <span className="text-sm font-medium text-foreground line-clamp-1 max-w-[200px]">
-            {project.name}
-          </span>
-          <span className="rounded-md bg-indigo/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-indigo">
-            {project.language}
-          </span>
-        </div>
+              {/* Explicit Save button */}
+              {activePath && (
+                <button
+                  onClick={saveFile}
+                  disabled={isSaving}
+                  className="hidden items-center gap-1 rounded-md border border-border-light px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground sm:flex disabled:opacity-50"
+                  title="Save file (Ctrl+S)"
+                >
+                  <Save className="h-3 w-3" />
+                  Save
+                  <kbd className="ml-0.5 rounded border border-border-light bg-surface px-1 py-px text-[9px] text-muted/60">
+                    ⌘S
+                  </kbd>
+                </button>
+              )}
 
-        <div className="flex items-center gap-3">
-          {/* Save indicator */}
-          <span className="flex items-center gap-1.5 text-[11px] text-muted">
-            {isSaving ? (
-              <>
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Saving…
-              </>
-            ) : lastSaved ? (
-              <>
-                <Save className="h-3 w-3" />
-                Saved
-              </>
-            ) : null}
-          </span>
+              <span className="hidden items-center gap-1.5 text-[11px] text-muted sm:flex">
+                <WifiOff className="h-3 w-3" />
+                Offline Ready
+              </span>
 
-          {/* Explicit Save button */}
-          {activePath && (
-            <button
-              onClick={saveFile}
-              disabled={isSaving}
-              className="hidden items-center gap-1 rounded-md border border-border-light px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground sm:flex disabled:opacity-50"
-              title="Save file (Ctrl+S)"
-            >
-              <Save className="h-3 w-3" />
-              Save
-              <kbd className="ml-0.5 rounded border border-border-light bg-surface px-1 py-px text-[9px] text-muted/60">
-                ⌘S
-              </kbd>
-            </button>
-          )}
+              {availableScripts.includes("dev") && (
+                <button
+                  onClick={() => runServerScript("dev")}
+                  className="hidden items-center gap-1 rounded-md border border-border-light px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground sm:flex"
+                >
+                  <Play className="h-3 w-3" />
+                  Run dev
+                </button>
+              )}
 
-          <span className="hidden items-center gap-1.5 text-[11px] text-muted sm:flex">
-            <WifiOff className="h-3 w-3" />
-            Offline Ready
-          </span>
+              {availableScripts.includes("start") && (
+                <button
+                  onClick={() => runServerScript("start")}
+                  className="hidden items-center gap-1 rounded-md border border-border-light px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground sm:flex"
+                >
+                  <Play className="h-3 w-3" />
+                  Run start
+                </button>
+              )}
 
-          {availableScripts.includes("dev") && (
-            <button
-              onClick={() => runServerScript("dev")}
-              className="hidden items-center gap-1 rounded-md border border-border-light px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground sm:flex"
-            >
-              <Play className="h-3 w-3" />
-              Run dev
-            </button>
-          )}
+              {runningScript && (
+                <button
+                  onClick={stopServer}
+                  className="hidden items-center gap-1 rounded-md border border-red-400/30 px-2 py-1 text-[11px] text-red-300 transition-colors hover:text-red-200 sm:flex"
+                >
+                  <Square className="h-3 w-3" />
+                  Stop
+                </button>
+              )}
 
-          {availableScripts.includes("start") && (
-            <button
-              onClick={() => runServerScript("start")}
-              className="hidden items-center gap-1 rounded-md border border-border-light px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground sm:flex"
-            >
-              <Play className="h-3 w-3" />
-              Run start
-            </button>
-          )}
+              {/* Run active file */}
+              {activePath && (
+                <button
+                  onClick={async () => {
+                    if (activePath) {
+                      await terminalRef.current?.writeToShell("node " + activePath + "\r");
+                    }
+                  }}
+                  className="hidden items-center gap-1 rounded-md border border-green-400/30 px-2 py-1 text-[11px] text-green-400 transition-colors hover:text-green-300 sm:flex"
+                  title={`Run ${activePath}`}
+                >
+                  <Play className="h-3 w-3" />
+                  Run
+                </button>
+              )}
 
-          {runningScript && (
-            <button
-              onClick={stopServer}
-              className="hidden items-center gap-1 rounded-md border border-red-400/30 px-2 py-1 text-[11px] text-red-300 transition-colors hover:text-red-200 sm:flex"
-            >
-              <Square className="h-3 w-3" />
-              Stop
-            </button>
-          )}
+              {/* Show/Hide Preview toggle */}
+              <button
+                onClick={() => setShowPreviewPane((v) => !v)}
+                className={`hidden items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors sm:flex ${showPreviewPane
+                    ? "border-indigo bg-indigo/10 text-indigo-light"
+                    : "border-border-light text-muted hover:text-foreground"
+                  }`}
+                title={showPreviewPane ? "Hide preview" : "Show preview"}
+              >
+                {showPreviewPane ? (
+                  <PanelRightClose className="h-3 w-3" />
+                ) : (
+                  <PanelRightOpen className="h-3 w-3" />
+                )}
+                Preview
+              </button>
 
-          {/* Show/Hide Preview toggle */}
-          <button
-            onClick={() => setShowPreviewPane((v) => !v)}
-            className={`hidden items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors sm:flex ${
-              showPreviewPane
-                ? "border-indigo bg-indigo/10 text-indigo-light"
-                : "border-border-light text-muted hover:text-foreground"
-            }`}
-            title={showPreviewPane ? "Hide preview" : "Show preview"}
-          >
-            {showPreviewPane ? (
-              <PanelRightClose className="h-3 w-3" />
-            ) : (
-              <PanelRightOpen className="h-3 w-3" />
-            )}
-            Preview
-          </button>
+              {/* AI Chat toggle */}
+              <button
+                onClick={() => setShowAIChat((v) => !v)}
+                className={`hidden items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors sm:flex ${showAIChat
+                    ? "border-indigo bg-indigo/10 text-indigo-light"
+                    : "border-border-light text-muted hover:text-foreground"
+                  }`}
+                title={showAIChat ? "Hide AI chat" : "Show AI chat"}
+              >
+                <Bot className="h-3 w-3" />
+                AI
+              </button>
 
-          {/* AI Chat toggle */}
-          <button
-            onClick={() => setShowAIChat((v) => !v)}
-            className={`hidden items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors sm:flex ${
-              showAIChat
-                ? "border-indigo bg-indigo/10 text-indigo-light"
-                : "border-border-light text-muted hover:text-foreground"
-            }`}
-            title={showAIChat ? "Hide AI chat" : "Show AI chat"}
-          >
-            <Bot className="h-3 w-3" />
-            AI
-          </button>
+              {(isStartingServer || serverProcessId) && (
+                <span className="hidden text-[10px] text-muted lg:block">
+                  {isStartingServer ? "Starting server…" : `PID ${serverProcessId}`}
+                </span>
+              )}
 
-          {(isStartingServer || serverProcessId) && (
-            <span className="hidden text-[10px] text-muted lg:block">
-              {isStartingServer ? "Starting server…" : `PID ${serverProcessId}`}
-            </span>
-          )}
+              <span className="hidden max-w-[160px] truncate text-[11px] text-muted sm:block">{user}</span>
 
-          <span className="hidden max-w-[160px] truncate text-[11px] text-muted sm:block">{user}</span>
+              <button
+                onClick={async () => {
+                  await flushAndNavigate("/").catch(() => { });
+                  logout();
+                }}
+                className="rounded-md border border-border-light px-2.5 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground"
+              >
+                <LogOut className="h-3 w-3" />
+              </button>
+            </div>
+          </header>
 
-          <button
-            onClick={async () => {
-              await flushAndNavigate("/").catch(() => {});
-              logout();
-            }}
-            className="rounded-md border border-border-light px-2.5 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground"
-          >
-            <LogOut className="h-3 w-3" />
-          </button>
-        </div>
-      </header>
-
-      {/* ─── Body ─── */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <Sidebar
-          projectId={projectId}
-          projectName={project.name}
-          activePath={activePath}
-          onFileSelect={openFile}
-          refreshKey={refreshTree}
-          userHash={userHash ?? ""}
-          encryptionKey={encryptionKey ?? undefined}
-          onFileCreated={handleSidebarFileCreated}
-          onFolderCreated={handleSidebarFolderCreated}
-          onEntryDeleted={handleSidebarEntryDeleted}
-        />
-
-        {/* ─── Split Pane Container (Editor + Preview) ─── */}
-        <div
-          ref={splitContainerRef}
-          className="flex flex-1 overflow-hidden"
-          style={{ cursor: isDraggingSplitter ? "col-resize" : undefined }}
-        >
-          {/* ── Left: Editor + Terminal ── */}
-          <div
-            className="flex flex-col overflow-hidden"
-            style={{ width: showPreviewPane ? `${splitPercent}%` : "100%" }}
-          >
-            {/* Tab bar */}
-            <TabBar
-              tabs={tabs}
+          {/* ─── Body ─── */}
+          <div className="flex flex-1 overflow-hidden">
+            {/* Sidebar */}
+            <Sidebar
+              projectId={projectId}
+              projectName={project.name}
               activePath={activePath}
-              onSelect={openFile}
-              onClose={closeTab}
+              onFileSelect={openFile}
+              refreshKey={refreshTree}
+              userHash={userHash ?? ""}
+              encryptionKey={encryptionKey ?? undefined}
+              onFileCreated={handleSidebarFileCreated}
+              onFolderCreated={handleSidebarFolderCreated}
+              onEntryDeleted={handleSidebarEntryDeleted}
             />
 
-            {/* Monaco or empty state */}
-            {activePath ? (
-              <div className="flex-1 overflow-hidden rounded-tr-lg">
-                <MonacoEditor
-                  height="100%"
-                  language={monacoLang}
-                  theme="brand-dark"
-                  beforeMount={handleBeforeMount}
-                  value={fileContent}
-                  onChange={handleEditorChange}
-                  options={{
-                    fontSize: 14,
-                    lineHeight: 1.6,
-                    fontFamily:
-                      "'JetBrains Mono', 'Fira Code', monospace",
-                    fontLigatures: true,
-                    minimap: { enabled: false },
-                    scrollBeyondLastLine: false,
-                    padding: { top: 16, bottom: 16 },
-                    lineNumbers: "on",
-                    renderLineHighlight: "all",
-                    bracketPairColorization: { enabled: true },
-                    smoothScrolling: true,
-                    cursorBlinking: "expand",
-                    cursorSmoothCaretAnimation: "on",
-                    cursorWidth: 2,
-                    wordWrap: "on",
-                    tabSize: 2,
-                    automaticLayout: true,
-                    roundedSelection: true,
-                    overviewRulerLanes: 0,
-                    hideCursorInOverviewRuler: true,
-                    overviewRulerBorder: false,
-                    guides: {
-                      indentation: true,
-                      bracketPairs: true,
-                    },
-                  }}
+            {/* ─── Split Pane Container (Editor + Preview) ─── */}
+            <div
+              ref={splitContainerRef}
+              className="flex flex-1 overflow-hidden"
+              style={{ cursor: isDraggingSplitter ? "col-resize" : undefined }}
+            >
+              {/* ── Left: Editor + Terminal ── */}
+              <div
+                className="flex flex-col overflow-hidden"
+                style={{ width: showPreviewPane ? `${splitPercent}%` : "100%" }}
+              >
+                {/* Tab bar */}
+                <TabBar
+                  tabs={tabs}
+                  activePath={activePath}
+                  onSelect={openFile}
+                  onClose={closeTab}
                 />
-              </div>
-            ) : (
-              /* Empty state */
-              <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo/10">
-                  <Code2 className="h-8 w-8 text-indigo" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-foreground">
-                    Welcome to {project.name}
-                  </h2>
-                  <p className="mt-1 text-sm text-muted">
-                    Open a file from the sidebar or create a new one to start
-                    coding.
-                  </p>
-                </div>
-                <div className="flex items-center gap-4 text-[12px] text-muted/60">
-                  <span className="flex items-center gap-1.5">
-                    <WifiOff className="h-3.5 w-3.5" /> Offline-First
-                  </span>
-                  <span>•</span>
-                  <span>OPFS Storage</span>
-                  <span>•</span>
-                  <span>Ctrl+S to Save</span>
-                </div>
-              </div>
-            )}
 
-            {/* Status bar */}
-            <div className="flex items-center justify-between border-t border-border bg-indigo/5 px-4 py-1">
-              <div className="flex items-center gap-3 text-[11px] text-muted">
-                <span className="flex items-center gap-1">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                  Offline Ready
-                </span>
-                {activePath && (
-                  <span className="capitalize">{monacoLang}</span>
-                )}
-              </div>
-              <div className="flex items-center gap-3 text-[11px] text-muted">
-                {activePath && (
-                  <>
-                    <span>
-                      {fileContent.split("\n").length} lines ·{" "}
-                      {fileContent.length} chars
-                    </span>
-                  </>
-                )}
-                <span className="flex items-center gap-1">
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      wc
-                        ? "bg-emerald-400"
-                        : wcBooting
-                          ? "bg-amber-400 animate-pulse"
-                          : "bg-zinc-500"
-                    }`}
-                  />
-                  {wc ? "Container" : wcBooting ? "Booting…" : "No Container"}
-                </span>
-                {rehydrationPhase && rehydrationPhase !== "ready" && (
-                  <span className="flex items-center gap-1">
-                    <span
-                      className={`h-1.5 w-1.5 rounded-full ${
-                        rehydrationPhase === "error"
-                          ? "bg-red-400"
-                          : "bg-amber-400 animate-pulse"
-                      }`}
+                {/* Monaco or empty state */}
+                {activePath ? (
+                  <div className="flex-1 overflow-hidden rounded-tr-lg">
+                    <MonacoEditor
+                      height="100%"
+                      language={monacoLang}
+                      theme="brand-dark"
+                      beforeMount={handleBeforeMount}
+                      value={fileContent}
+                      onChange={handleEditorChange}
+                      options={{
+                        fontSize: 14,
+                        lineHeight: 1.6,
+                        fontFamily:
+                          "'JetBrains Mono', 'Fira Code', monospace",
+                        fontLigatures: true,
+                        minimap: { enabled: false },
+                        scrollBeyondLastLine: false,
+                        padding: { top: 16, bottom: 16 },
+                        lineNumbers: "on",
+                        renderLineHighlight: "all",
+                        bracketPairColorization: { enabled: true },
+                        smoothScrolling: true,
+                        cursorBlinking: "expand",
+                        cursorSmoothCaretAnimation: "on",
+                        cursorWidth: 2,
+                        wordWrap: "on",
+                        tabSize: 2,
+                        automaticLayout: true,
+                        roundedSelection: true,
+                        overviewRulerLanes: 0,
+                        hideCursorInOverviewRuler: true,
+                        overviewRulerBorder: false,
+                        guides: {
+                          indentation: true,
+                          bracketPairs: true,
+                        },
+                      }}
                     />
-                    {rehydrationPhase === "mounting"
-                      ? "Mounting…"
-                      : rehydrationPhase === "installing"
-                        ? "Installing…"
-                        : "Install Error"}
-                  </span>
+                  </div>
+                ) : (
+                  /* Empty state */
+                  <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
+                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo/10">
+                      <Code2 className="h-8 w-8 text-indigo" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-semibold text-foreground">
+                        Welcome to {project.name}
+                      </h2>
+                      <p className="mt-1 text-sm text-muted">
+                        Open a file from the sidebar or create a new one to start
+                        coding.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-4 text-[12px] text-muted/60">
+                      <span className="flex items-center gap-1.5">
+                        <WifiOff className="h-3.5 w-3.5" /> Offline-First
+                      </span>
+                      <span>•</span>
+                      <span>OPFS Storage</span>
+                      <span>•</span>
+                      <span>Ctrl+S to Save</span>
+                    </div>
+                  </div>
                 )}
-                {activePorts.length > 0 && (
-                  <span className="flex items-center gap-1">
-                    <span className="h-1.5 w-1.5 rounded-full bg-indigo animate-pulse" />
-                    {activePorts.length === 1
-                      ? `Port ${activePorts[0].port}`
-                      : `${activePorts.length} ports`}
-                  </span>
-                )}
-                <span>OPFS</span>
+
+                {/* Status bar */}
+                <div className="flex items-center justify-between border-t border-border bg-indigo/5 px-4 py-1">
+                  <div className="flex items-center gap-3 text-[11px] text-muted">
+                    <span className="flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                      Offline Ready
+                    </span>
+                    {activePath && (
+                      <span className="capitalize">{monacoLang}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 text-[11px] text-muted">
+                    {activePath && (
+                      <>
+                        <span>
+                          {fileContent.split("\n").length} lines ·{" "}
+                          {fileContent.length} chars
+                        </span>
+                      </>
+                    )}
+                    <span className="flex items-center gap-1">
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${wc
+                            ? "bg-emerald-400"
+                            : wcBooting
+                              ? "bg-amber-400 animate-pulse"
+                              : "bg-zinc-500"
+                          }`}
+                      />
+                      {wc ? "Container" : wcBooting ? "Booting…" : "No Container"}
+                    </span>
+                    {rehydrationPhase && rehydrationPhase !== "ready" && (
+                      <span className="flex items-center gap-1">
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${rehydrationPhase === "error"
+                              ? "bg-red-400"
+                              : "bg-amber-400 animate-pulse"
+                            }`}
+                        />
+                        {rehydrationPhase === "mounting"
+                          ? "Mounting…"
+                          : rehydrationPhase === "installing"
+                            ? "Installing…"
+                            : "Install Error"}
+                      </span>
+                    )}
+                    {activePorts.length > 0 && (
+                      <span className="flex items-center gap-1">
+                        <span className="h-1.5 w-1.5 rounded-full bg-indigo animate-pulse" />
+                        {activePorts.length === 1
+                          ? `Port ${activePorts[0].port}`
+                          : `${activePorts.length} ports`}
+                      </span>
+                    )}
+                    <span>OPFS</span>
+                  </div>
+                </div>
+
+                {/* WebContainer Terminal */}
+                {wc && <WebTerminal ref={terminalRef} instance={wc} />}
               </div>
+
+              {/* ── Resizable Splitter Handle ── */}
+              {showPreviewPane && (
+                <div
+                  onMouseDown={handleSplitterMouseDown}
+                  className={`group relative z-10 flex w-1.5 shrink-0 cursor-col-resize items-center justify-center transition-colors ${isDraggingSplitter
+                      ? "bg-indigo"
+                      : "bg-border hover:bg-indigo/60"
+                    }`}
+                >
+                  {/* Grab dots */}
+                  <div className="flex flex-col gap-1">
+                    <span className={`block h-1 w-1 rounded-full ${isDraggingSplitter ? "bg-white" : "bg-muted/40 group-hover:bg-muted"
+                      }`} />
+                    <span className={`block h-1 w-1 rounded-full ${isDraggingSplitter ? "bg-white" : "bg-muted/40 group-hover:bg-muted"
+                      }`} />
+                    <span className={`block h-1 w-1 rounded-full ${isDraggingSplitter ? "bg-white" : "bg-muted/40 group-hover:bg-muted"
+                      }`} />
+                  </div>
+                </div>
+              )}
+
+              {/* ── Right: Iframe Preview ── */}
+              {showPreviewPane && (
+                <div
+                  className="flex overflow-hidden"
+                  style={{ width: `${100 - splitPercent}%` }}
+                >
+                  <PreviewPane
+                    ports={previewPorts}
+                    onClose={handleClosePreview}
+                    isDragging={isDraggingSplitter}
+                  />
+                </div>
+              )}
             </div>
 
-            {/* WebContainer Terminal */}
-            {wc && <WebTerminal ref={terminalRef} instance={wc} />}
+            {/* ── AI Chat Sidebar — always mounted so the worker/state survive hide ── */}
+            <ChatSidebar
+              isOpen={showAIChat}
+              onToggle={() => setShowAIChat((v) => !v)}
+              activePath={activePath}
+              activeContent={fileContent}
+              userHash={userHash ?? ""}
+              projectId={projectId}
+              encryptionKey={encryptionKey ?? undefined}
+              onApplyFileAction={handleApplyFileAction}
+              readFileContent={handleReadFileContent}
+            />
           </div>
-
-          {/* ── Resizable Splitter Handle ── */}
-          {showPreviewPane && (
-            <div
-              onMouseDown={handleSplitterMouseDown}
-              className={`group relative z-10 flex w-1.5 shrink-0 cursor-col-resize items-center justify-center transition-colors ${
-                isDraggingSplitter
-                  ? "bg-indigo"
-                  : "bg-border hover:bg-indigo/60"
-              }`}
-            >
-              {/* Grab dots */}
-              <div className="flex flex-col gap-1">
-                <span className={`block h-1 w-1 rounded-full ${
-                  isDraggingSplitter ? "bg-white" : "bg-muted/40 group-hover:bg-muted"
-                }`} />
-                <span className={`block h-1 w-1 rounded-full ${
-                  isDraggingSplitter ? "bg-white" : "bg-muted/40 group-hover:bg-muted"
-                }`} />
-                <span className={`block h-1 w-1 rounded-full ${
-                  isDraggingSplitter ? "bg-white" : "bg-muted/40 group-hover:bg-muted"
-                }`} />
-              </div>
-            </div>
-          )}
-
-          {/* ── Right: Iframe Preview ── */}
-          {showPreviewPane && (
-            <div
-              className="flex overflow-hidden"
-              style={{ width: `${100 - splitPercent}%` }}
-            >
-              <PreviewPane
-                ports={previewPorts}
-                onClose={handleClosePreview}
-                isDragging={isDraggingSplitter}
-              />
-            </div>
-          )}
         </div>
-
-        {/* ── AI Chat Sidebar — always mounted so the worker/state survive hide ── */}
-        <ChatSidebar
-          isOpen={showAIChat}
-          onToggle={() => setShowAIChat((v) => !v)}
-          activePath={activePath}
-          activeContent={fileContent}
-          userHash={userHash ?? ""}
-          projectId={projectId}
-          encryptionKey={encryptionKey ?? undefined}
-          onApplyFileAction={handleApplyFileAction}
-          readFileContent={handleReadFileContent}
-        />
-      </div>
-    </div>
-    </PendingChangeProvider>
+      </PendingChangeProvider>
     </AIProvider>
   );
 };
